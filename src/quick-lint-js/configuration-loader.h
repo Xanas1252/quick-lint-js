@@ -14,6 +14,7 @@ struct file_to_lint;
 
 class configuration_loader {
  public:
+  // @@@ should return configuration_or_error so we can remember the error
   configuration* load_for_file(const file_to_lint&);
 
   std::string error() const;

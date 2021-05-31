@@ -14,6 +14,7 @@
 #include <quick-lint-js/string-view.h>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #if QLJS_HAVE_FCNTL_H
 #include <fcntl.h>
@@ -108,14 +109,22 @@ windows_handle_file_ref windows_handle_file::ref() noexcept { return *this; }
 #endif
 
 #if QLJS_HAVE_UNISTD_H
+posix_fd_file_ref::posix_fd_file_ref() noexcept
+    : posix_fd_file_ref(this->invalid_fd) {}
+
 posix_fd_file_ref::posix_fd_file_ref(int fd) noexcept : fd_(fd) {
-  QLJS_ASSERT(this->fd_ != -1);
+  QLJS_ASSERT(this->fd_ >= 0 || this->fd_ == this->invalid_fd);
+}
+
+bool posix_fd_file_ref::valid() const noexcept {
+  return this->fd_ != this->invalid_fd;
 }
 
 int posix_fd_file_ref::get() noexcept { return this->fd_; }
 
 file_read_result posix_fd_file_ref::read(void *buffer,
                                          int buffer_size) noexcept {
+  QLJS_ASSERT(this->valid());
   ::ssize_t read_size =
       ::read(this->fd_, buffer, narrow_cast<std::size_t>(buffer_size));
   if (read_size == -1) {
@@ -134,6 +143,7 @@ file_read_result posix_fd_file_ref::read(void *buffer,
 
 std::optional<int> posix_fd_file_ref::write(const void *buffer,
                                             int buffer_size) noexcept {
+  QLJS_ASSERT(this->valid());
   ::ssize_t written_size =
       ::write(this->fd_, buffer, narrow_cast<std::size_t>(buffer_size));
   if (written_size == -1) {
@@ -146,8 +156,19 @@ std::string posix_fd_file_ref::get_last_error_message() {
   return std::strerror(errno);
 }
 
-posix_fd_file::posix_fd_file(int fd) noexcept : posix_fd_file_ref(fd) {
-  QLJS_ASSERT(fd != invalid_fd);
+posix_fd_file::posix_fd_file() noexcept : posix_fd_file_ref() {}
+
+posix_fd_file::posix_fd_file(int fd) noexcept : posix_fd_file_ref(fd) {}
+
+posix_fd_file::posix_fd_file(posix_fd_file &&other) noexcept
+    : posix_fd_file_ref(std::exchange(other.fd_, this->invalid_fd)) {}
+
+posix_fd_file &posix_fd_file::operator=(posix_fd_file &&other) noexcept {
+  std::swap(this->fd_, other.fd_);
+  if (other.fd_ != invalid_fd) {
+    other.close();
+  }
+  return *this;
 }
 
 posix_fd_file::~posix_fd_file() {
@@ -157,7 +178,7 @@ posix_fd_file::~posix_fd_file() {
 }
 
 void posix_fd_file::close() {
-  QLJS_ASSERT(this->fd_ != invalid_fd);
+  QLJS_ASSERT(this->valid());
   int rc = ::close(this->fd_);
   if (rc != 0) {
     std::fprintf(stderr, "error: failed to close file: %s\n",

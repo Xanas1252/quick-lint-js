@@ -91,6 +91,7 @@ configuration* configuration_loader::find_and_load_config_file(
         return config;
       }
 
+      // @@@ this is inefficient as fuck!
       read_file_result config_json = read_file(config_path.c_str());
       if (config_json.ok()) {
         auto [config_it, inserted] = this->loaded_config_files_.emplace(
