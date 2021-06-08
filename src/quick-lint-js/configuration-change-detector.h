@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include <vector>
 #include <list> // @@@
+#include <mutex>
 
 #if QLJS_HAVE_KQUEUE
 #include <sys/event.h>
@@ -149,12 +150,20 @@ class configuration_filesystem_win32 : public configuration_filesystem {
   void process_changes(configuration_change_detector_impl&,
                        std::vector<configuration_change>* out_changes);
 
+  windows_handle_file_ref get_change_event() noexcept;
+
  private:
   struct watched_directory {
-    explicit watched_directory(HANDLE directory_handle)
-        : directory_handle(directory_handle) {}
+    explicit watched_directory(HANDLE directory_handle,
+                               configuration_filesystem_win32* self)
+        : directory_handle(directory_handle), self(self) {
+      read_changes_overlapped.hEvent =
+          ::CreateEventW(/*lpEventAttributes=*/nullptr, /*bManualReset=*/false,
+                         /*bInitialState=*/false, /*lpName=*/nullptr); // @@@ check
+    }
 
     windows_handle_file directory_handle;
+    configuration_filesystem_win32* self;
 
     OVERLAPPED read_changes_overlapped;
     struct {
@@ -167,13 +176,22 @@ class configuration_filesystem_win32 : public configuration_filesystem {
     REQUEST_OPLOCK_OUTPUT_BUFFER oplock_response;
   };
 
+  enum completion_key : ULONG_PTR {
+      stop_io_thread = 1,
+      directory,
+  };
+
   void watch_directory(const canonical_path&);
 
-  static void on_read_directory_changes(DWORD dwErrorCode,
-                                        DWORD dwNumberOfBytesTransfered,
-                                        LPOVERLAPPED lpOverlapped) noexcept;
+  void run_io_thread();
 
-  // @@@ double check: does deque have stable ptrs?
+  windows_handle_file change_event_;
+
+  windows_handle_file io_completion_port_;
+  std::thread io_thread_;
+
+  std::mutex watched_directories_mutex_;
+  // @@@ double check: does deque have stable ptrs? if so, use deque instead of list
   std::list<watched_directory> watched_directories_;
 };
 #endif
