@@ -387,14 +387,19 @@ configuration_filesystem_win32::configuration_filesystem_win32() = default;
 
 configuration_filesystem_win32::~configuration_filesystem_win32() {
   for (watched_directory& dir : this->watched_directories_) {
-    ::UnregisterWait(dir.oplock_wait_handle);
+    BOOL ok = ::UnregisterWaitEx(/*WaitHandle=*/dir.oplock_wait_handle,
+                                 /*CompletionEvent=*/INVALID_HANDLE_VALUE);
+    if (!ok) {
+      DWORD error = ::GetLastError();
+        QLJS_UNIMPLEMENTED();
+    }
   }
   for (watched_directory& dir : this->watched_directories_) {
     if (dir.directory_handle.get() == nullptr) {
-      continue; // @@@ gross. avoid crash if oplock closes.
+      continue;  // @@@ gross. avoid crash if oplock closes.
     }
     [[maybe_unused]] BOOL ok =
-        ::CancelIoEx(dir.directory_handle.get(), &dir.read_changes_overlapped);
+        ::CancelIoEx(dir.directory_handle.get(), nullptr);
     if (!ok) {
       DWORD error = ::GetLastError();
       if (error == ERROR_NOT_FOUND) {
@@ -406,8 +411,23 @@ configuration_filesystem_win32::~configuration_filesystem_win32() {
   }
   for (watched_directory& dir : this->watched_directories_) {
     [[maybe_unused]] DWORD bytes_transferred;
-    BOOL ok = ::GetOverlappedResult(
-        dir.directory_handle.get(), &dir.read_changes_overlapped, &bytes_transferred, /*bWait=*/true);
+    BOOL ok = ::GetOverlappedResult(dir.directory_handle.get(),
+                                    &dir.read_changes_overlapped,
+                                    &bytes_transferred, /*bWait=*/true);
+    if (!ok) {
+      DWORD error = ::GetLastError();
+      if (error == ERROR_OPERATION_ABORTED) {
+        // Expected: CancelIoEx succeeded.
+      } else {
+        QLJS_UNIMPLEMENTED();
+      }
+    }
+  }
+  for (watched_directory& dir : this->watched_directories_) {
+    [[maybe_unused]] DWORD bytes_transferred;
+    BOOL ok = ::GetOverlappedResult(dir.directory_handle.get(),
+                                    &dir.oplock_overlapped,
+                                    &bytes_transferred, /*bWait=*/true);
     if (!ok) {
       DWORD error = ::GetLastError();
       if (error == ERROR_OPERATION_ABORTED) {
