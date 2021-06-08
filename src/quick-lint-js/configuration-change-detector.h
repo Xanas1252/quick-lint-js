@@ -23,6 +23,10 @@
 #include <poll.h>
 #endif
 
+#if defined(_WIN32)
+#include <Windows.h>
+#endif
+
 namespace quick_lint_js {
 class configuration_filesystem;
 struct read_file_result;
@@ -129,6 +133,30 @@ class configuration_filesystem_kqueue : public configuration_filesystem {
 };
 #endif
 
+#if defined(_WIN32)
+class configuration_filesystem_win32 : public configuration_filesystem {
+ public:
+  explicit configuration_filesystem_win32();
+
+  ~configuration_filesystem_win32();
+
+  canonical_path_result canonicalize_path(const std::string&) override;
+  void enter_directory(const canonical_path&) override;
+  read_file_result read_file(const canonical_path& directory,
+                             std::string_view file_name) override;
+
+  void process_changes(configuration_change_detector_impl&,
+                       std::vector<configuration_change>* out_changes);
+
+  const std::vector<HANDLE>& get_event_handles();
+
+ private:
+  void watch_directory(const canonical_path&);
+
+  // Each HANDLE is returned by FindFirstChangeNotificationW.
+  std::vector<HANDLE> watched_directories_;
+};
+#endif
 }
 
 #endif

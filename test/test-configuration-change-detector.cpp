@@ -69,6 +69,10 @@ struct configuration_change_detector {
       : kqueue_fd(::kqueue()), fs_(this->kqueue_fd.ref()), impl_(&this->fs_) {
     QLJS_ASSERT(this->kqueue_fd.valid());
   }
+#elif defined(_WIN32)
+  explicit configuration_change_detector()
+      : impl_(&this->fs_) {
+  }
 #endif
 
   configuration* get_config_for_file(const std::string& path) {
@@ -132,6 +136,33 @@ struct configuration_change_detector {
     }
 
     return config_changes;
+#elif defined(_WIN32)
+    const std::vector<HANDLE>& handles = this->fs_.get_event_handles();
+    DWORD rc = ::WaitForMultipleObjects(narrow_cast<DWORD>(handles.size()), handles.data(),
+                           /*bWaitAll=*/false,
+                           /*dwMilliseconds=*/0);
+    if (rc == WAIT_FAILED) {
+      ADD_FAILURE() << "WaitForMultipleObjects failed: " << ::GetLastError();
+      return {};
+    }
+    bool timed_out = rc == WAIT_TIMEOUT;
+
+    std::vector<configuration_change> changes;
+    this->fs_.process_changes(this->impl_, &changes);
+
+    if (timed_out) {
+      EXPECT_THAT(changes, IsEmpty())
+          << "no filesystem notifications happened, but changes were detected";
+    } else {
+      EXPECT_GE(rc, WAIT_OBJECT_0);
+      EXPECT_LT(rc, WAIT_OBJECT_0 + handles.size());
+      // NOTE(strager): We cannot assert that at least one change happened,
+      // because filesystem notifications might be spurious.
+    }
+
+    return changes;
+#else
+#error "Unsupported platform"
 #endif
   }
 
@@ -140,6 +171,8 @@ struct configuration_change_detector {
 #elif QLJS_HAVE_KQUEUE
   posix_fd_file kqueue_fd;
   configuration_filesystem_kqueue fs_;
+#elif defined(_WIN32)
+  configuration_filesystem_win32 fs_;
 #endif
   configuration_change_detector_impl impl_;
 };
