@@ -386,9 +386,30 @@ void configuration_filesystem_kqueue::watch_file(posix_fd_file_ref file) {
 configuration_filesystem_win32::configuration_filesystem_win32() = default;
 
 configuration_filesystem_win32::~configuration_filesystem_win32() {
-  for (HANDLE dir : this->watched_directories_) {
-    [[maybe_unused]] BOOL ok = ::FindCloseChangeNotification(dir);
-    QLJS_ASSERT(ok);
+  for (watched_directory& dir : this->watched_directories_) {
+    [[maybe_unused]] BOOL ok =
+        ::CancelIoEx(dir.directory_handle.get(), &dir.overlapped);
+    if (!ok) {
+      DWORD error = ::GetLastError();
+      if (error == ERROR_NOT_FOUND) {
+        // @@@ probably shouldn't happen, but it does.
+      } else {
+        QLJS_UNIMPLEMENTED();
+      }
+    }
+  }
+  for (watched_directory& dir : this->watched_directories_) {
+    [[maybe_unused]] DWORD bytes_transferred;
+    BOOL ok = ::GetOverlappedResult(
+        dir.directory_handle.get(), &dir.overlapped, &bytes_transferred, /*bWait=*/true);
+    if (!ok) {
+      DWORD error = ::GetLastError();
+      if (error == ERROR_OPERATION_ABORTED) {
+        // Expected: CancelIoEx succeeded.
+      } else {
+        QLJS_UNIMPLEMENTED();
+      }
+    }
   }
 }
 
@@ -412,15 +433,7 @@ read_file_result configuration_filesystem_win32::read_file(
 void configuration_filesystem_win32::process_changes(
     configuration_change_detector_impl& detector,
     std::vector<configuration_change>* out_changes) {
-  for (HANDLE dir : this->watched_directories_) {
-    [[maybe_unused]] BOOL ok = ::FindNextChangeNotification(dir);
-    QLJS_ASSERT(ok);
-  }
   detector.refresh(out_changes);
-}
-
-const std::vector<HANDLE>& configuration_filesystem_win32::get_event_handles() {
-  return this->watched_directories_;
 }
 
 void configuration_filesystem_win32::watch_directory(
@@ -431,20 +444,45 @@ void configuration_filesystem_win32::watch_directory(
     QLJS_UNIMPLEMENTED();
   }
 
-  // @@@ avoid duplicate handles for dirs
-  HANDLE changeHandle = ::FindFirstChangeNotificationW(
-      wpath->c_str(), /*bWatchSubtree=*/false,
-      // @@@ audit list
-      /*dwNotifyFilter=*/
-      FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
-          FILE_NOTIFY_CHANGE_ATTRIBUTES | FILE_NOTIFY_CHANGE_SIZE |
-          FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SECURITY);
-  if (changeHandle == INVALID_HANDLE_VALUE) {
-    std::fprintf(stderr, "fatal: FindFirstChangeNotificationW failed: %d\n",
+    HANDLE directory_handle = ::CreateFileW(
+      wpath->c_str(), /*dwDesiredAccess=*/GENERIC_READ,
+      /*dwShareMode=*/FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE,
+      /*lpSecurityAttributes=*/nullptr,
+      /*dwCreationDisposition=*/OPEN_EXISTING,
+      /*dwFlagsAndAttributes=*/FILE_ATTRIBUTE_NORMAL |
+          FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
+      /*hTemplateFile=*/nullptr);
+  if (directory_handle == INVALID_HANDLE_VALUE) {
+    QLJS_UNIMPLEMENTED();  // @@@
+  }
+  watched_directory& dir =
+      this->watched_directories_.emplace_back(directory_handle);
+
+  BOOL ok = ::ReadDirectoryChangesW(
+      /*hDirectory=*/dir.directory_handle.get(),
+      /*lpBuffer=*/&dir.buffer,
+      /*nBufferLength=*/sizeof(dir.buffer),
+      /*bWatchSubtree=*/false,
+      /*dwNotifyFilter=*/FILE_NOTIFY_CHANGE_FILE_NAME |
+          FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_ATTRIBUTES |
+          FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE |
+          FILE_NOTIFY_CHANGE_SECURITY | FILE_NOTIFY_CHANGE_CREATION |
+          FILE_NOTIFY_CHANGE_LAST_ACCESS,
+      /*lpBytesReturned=*/nullptr,
+      /*lpOverlapped=*/&dir.overlapped,
+      /*lpCompletionRoutine=*/&this->on_read_directory_changes);
+  if (!ok) {
+    std::fprintf(stderr, "fatal: ReadDirectoryChangesW failed: %d\n",
                  ::GetLastError());
     QLJS_UNIMPLEMENTED();  // @@@
   }
-  this->watched_directories_.emplace_back(changeHandle);
+}
+
+void configuration_filesystem_win32::on_read_directory_changes(
+    DWORD dwErrorCode,
+                                      DWORD dwNumberOfBytesTransfered,
+                                      LPOVERLAPPED lpOverlapped) noexcept {
+    // @@@ do we need to do anything here?
 }
 #endif
 }

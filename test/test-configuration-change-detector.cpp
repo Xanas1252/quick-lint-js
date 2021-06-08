@@ -137,15 +137,9 @@ struct configuration_change_detector {
 
     return config_changes;
 #elif defined(_WIN32)
-    const std::vector<HANDLE>& handles = this->fs_.get_event_handles();
-    DWORD rc = ::WaitForMultipleObjects(narrow_cast<DWORD>(handles.size()), handles.data(),
-                           /*bWaitAll=*/false,
-                           /*dwMilliseconds=*/0);
-    if (rc == WAIT_FAILED) {
-      ADD_FAILURE() << "WaitForMultipleObjects failed: " << ::GetLastError();
-      return {};
-    }
-    bool timed_out = rc == WAIT_TIMEOUT;
+      // @@@ should we loop while rc==WAIT_IO_COMPLETION ?
+    DWORD rc = ::SleepEx(0, /*bAlertable=*/true);
+    bool timed_out = rc == 0;
 
     std::vector<configuration_change> changes;
     this->fs_.process_changes(this->impl_, &changes);
@@ -154,8 +148,7 @@ struct configuration_change_detector {
       EXPECT_THAT(changes, IsEmpty())
           << "no filesystem notifications happened, but changes were detected";
     } else {
-      EXPECT_GE(rc, WAIT_OBJECT_0);
-      EXPECT_LT(rc, WAIT_OBJECT_0 + handles.size());
+      EXPECT_EQ(rc, WAIT_IO_COMPLETION);
       // NOTE(strager): We cannot assert that at least one change happened,
       // because filesystem notifications might be spurious.
     }

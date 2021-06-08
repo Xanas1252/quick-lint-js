@@ -14,6 +14,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <list> // @@@
 
 #if QLJS_HAVE_KQUEUE
 #include <sys/event.h>
@@ -148,13 +149,27 @@ class configuration_filesystem_win32 : public configuration_filesystem {
   void process_changes(configuration_change_detector_impl&,
                        std::vector<configuration_change>* out_changes);
 
-  const std::vector<HANDLE>& get_event_handles();
-
  private:
+  struct watched_directory {
+    explicit watched_directory(HANDLE directory_handle)
+        : directory_handle(directory_handle) {}
+
+    windows_handle_file directory_handle;
+    OVERLAPPED overlapped;
+    struct {
+      FILE_NOTIFY_INFORMATION info;
+      wchar_t name[1024];  // @@@ needed?
+    } buffer;
+  };
+
   void watch_directory(const canonical_path&);
 
-  // Each HANDLE is returned by FindFirstChangeNotificationW.
-  std::vector<HANDLE> watched_directories_;
+  static void on_read_directory_changes(DWORD dwErrorCode,
+                                        DWORD dwNumberOfBytesTransfered,
+                                        LPOVERLAPPED lpOverlapped) noexcept;
+
+  // @@@ double check: does deque have stable ptrs?
+  std::list<watched_directory> watched_directories_;
 };
 #endif
 }
