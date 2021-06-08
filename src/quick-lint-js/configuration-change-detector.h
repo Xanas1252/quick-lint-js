@@ -155,11 +155,16 @@ class configuration_filesystem_win32 : public configuration_filesystem {
         : directory_handle(directory_handle) {}
 
     windows_handle_file directory_handle;
-    OVERLAPPED overlapped;
+
+    OVERLAPPED read_changes_overlapped;
     struct {
       FILE_NOTIFY_INFORMATION info;
       wchar_t name[1024];  // @@@ needed?
     } buffer;
+
+    OVERLAPPED oplock_overlapped;
+    HANDLE oplock_wait_handle;
+    REQUEST_OPLOCK_OUTPUT_BUFFER oplock_response;
   };
 
   void watch_directory(const canonical_path&);

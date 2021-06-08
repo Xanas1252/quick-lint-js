@@ -387,8 +387,14 @@ configuration_filesystem_win32::configuration_filesystem_win32() = default;
 
 configuration_filesystem_win32::~configuration_filesystem_win32() {
   for (watched_directory& dir : this->watched_directories_) {
+    ::UnregisterWait(dir.oplock_wait_handle);
+  }
+  for (watched_directory& dir : this->watched_directories_) {
+    if (dir.directory_handle.get() == nullptr) {
+      continue; // @@@ gross. avoid crash if oplock closes.
+    }
     [[maybe_unused]] BOOL ok =
-        ::CancelIoEx(dir.directory_handle.get(), &dir.overlapped);
+        ::CancelIoEx(dir.directory_handle.get(), &dir.read_changes_overlapped);
     if (!ok) {
       DWORD error = ::GetLastError();
       if (error == ERROR_NOT_FOUND) {
@@ -401,7 +407,7 @@ configuration_filesystem_win32::~configuration_filesystem_win32() {
   for (watched_directory& dir : this->watched_directories_) {
     [[maybe_unused]] DWORD bytes_transferred;
     BOOL ok = ::GetOverlappedResult(
-        dir.directory_handle.get(), &dir.overlapped, &bytes_transferred, /*bWait=*/true);
+        dir.directory_handle.get(), &dir.read_changes_overlapped, &bytes_transferred, /*bWait=*/true);
     if (!ok) {
       DWORD error = ::GetLastError();
       if (error == ERROR_OPERATION_ABORTED) {
@@ -458,6 +464,59 @@ void configuration_filesystem_win32::watch_directory(
   watched_directory& dir =
       this->watched_directories_.emplace_back(directory_handle);
 
+  // @@@ create/destroy the event cleanly
+  dir.oplock_overlapped.hEvent = ::CreateEvent(/*lpEventAttributes=*/nullptr, /*bManualReset=*/false,
+      /*bInitialState=*/false, /*lpName=*/nullptr);
+  REQUEST_OPLOCK_INPUT_BUFFER request;
+    request.StructureVersion = REQUEST_OPLOCK_CURRENT_VERSION;
+  request.StructureLength = sizeof(REQUEST_OPLOCK_INPUT_BUFFER);
+    request.RequestedOplockLevel =
+      OPLOCK_LEVEL_CACHE_READ | OPLOCK_LEVEL_CACHE_HANDLE;
+  request.Flags = REQUEST_OPLOCK_INPUT_FLAG_REQUEST;
+  BOOL okie =
+      ::DeviceIoControl(/*hDevice=*/dir.directory_handle.get(),
+                                /*dwIoControlCode=*/FSCTL_REQUEST_OPLOCK,
+                        /*lpInBuffer=*/&request,
+                        /*nInBufferSize=*/sizeof(request),
+                        /*lpOutBuffer=*/&dir.oplock_response,
+                        /*nOutBufferSize=*/sizeof(dir.oplock_response),
+                        /*lpBytesReturned=*/nullptr, &dir.oplock_overlapped);
+  if (okie) {
+    QLJS_UNIMPLEMENTED();
+  } else {
+    DWORD error = ::GetLastError();
+    if (error == ERROR_IO_PENDING) {
+        // @@@ we don't wanna wait. event fires when oplock is done.
+      //[[maybe_unused]] DWORD bytes_transferred;
+      //BOOL ok =
+      //    ::GetOverlappedResult(dir.directory_handle.get(), &overlapped,
+      //                          &bytes_transferred, /*bWait=*/true);
+      //if (!ok) {
+      //  DWORD error = ::GetLastError();
+      //  QLJS_UNIMPLEMENTED();
+      //}
+        BOOL ok = ::RegisterWaitForSingleObject(
+            /*phNewWaitObject=*/&dir.oplock_wait_handle,
+            /*hObject=*/dir.oplock_overlapped.hEvent,
+            /*Callback=*/
+            [](PVOID lpParameter, BOOLEAN TimerOrWaitFired) -> void {
+              watched_directory& dir =
+                  *reinterpret_cast<watched_directory*>(lpParameter);
+              QLJS_ASSERT(!TimerOrWaitFired);
+              fprintf(stderr, "@@@!\n");
+              dir.directory_handle.close();
+            },
+            /*Context=*/&dir,
+            /*dwMilliseconds=*/INFINITE,
+            /*dwFlags=*/WT_EXECUTEDEFAULT);
+        if (!ok) {
+          QLJS_UNIMPLEMENTED();
+        }
+    } else {
+      QLJS_UNIMPLEMENTED();  // @@@
+    }
+  }
+
   BOOL ok = ::ReadDirectoryChangesW(
       /*hDirectory=*/dir.directory_handle.get(),
       /*lpBuffer=*/&dir.buffer,
@@ -469,7 +528,7 @@ void configuration_filesystem_win32::watch_directory(
           FILE_NOTIFY_CHANGE_SECURITY | FILE_NOTIFY_CHANGE_CREATION |
           FILE_NOTIFY_CHANGE_LAST_ACCESS,
       /*lpBytesReturned=*/nullptr,
-      /*lpOverlapped=*/&dir.overlapped,
+      /*lpOverlapped=*/&dir.read_changes_overlapped,
       /*lpCompletionRoutine=*/&this->on_read_directory_changes);
   if (!ok) {
     std::fprintf(stderr, "fatal: ReadDirectoryChangesW failed: %d\n",
