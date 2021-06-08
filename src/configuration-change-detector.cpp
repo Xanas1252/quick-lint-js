@@ -12,6 +12,7 @@
 #include <quick-lint-js/file.h>
 #include <quick-lint-js/have.h>
 #include <quick-lint-js/narrow-cast.h>
+#include <quick-lint-js/utf-16.h>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -378,6 +379,72 @@ void configuration_filesystem_kqueue::watch_file(posix_fd_file_ref file) {
   if (kqueue_rc == -1) {
     QLJS_UNIMPLEMENTED();  // @@@
   }
+}
+#endif
+
+#if defined(_WIN32)
+configuration_filesystem_win32::configuration_filesystem_win32() = default;
+
+configuration_filesystem_win32::~configuration_filesystem_win32() {
+  for (HANDLE dir : this->watched_directories_) {
+    [[maybe_unused]] BOOL ok = ::FindCloseChangeNotification(dir);
+    QLJS_ASSERT(ok);
+  }
+}
+
+canonical_path_result configuration_filesystem_win32::canonicalize_path(
+    const std::string& path) {
+  return quick_lint_js::canonicalize_path(path);
+}
+
+void configuration_filesystem_win32::enter_directory(
+    const canonical_path& directory) {
+  this->watch_directory(directory);
+}
+
+read_file_result configuration_filesystem_win32::read_file(
+    const canonical_path& directory, std::string_view file_name) {
+  canonical_path config_path = directory;
+  config_path.append_component(file_name);
+  return quick_lint_js::read_file(config_path.c_str());
+}
+
+void configuration_filesystem_win32::process_changes(
+    configuration_change_detector_impl& detector,
+    std::vector<configuration_change>* out_changes) {
+  for (HANDLE dir : this->watched_directories_) {
+    [[maybe_unused]] BOOL ok = ::FindNextChangeNotification(dir);
+    QLJS_ASSERT(ok);
+  }
+  detector.refresh(out_changes);
+}
+
+const std::vector<HANDLE>& configuration_filesystem_win32::get_event_handles() {
+  return this->watched_directories_;
+}
+
+void configuration_filesystem_win32::watch_directory(
+    const canonical_path& directory) {
+  std::optional<std::wstring> wpath =
+      mbstring_to_wstring(directory.c_str());
+  if (!wpath.has_value()) {
+    QLJS_UNIMPLEMENTED();
+  }
+
+  // @@@ avoid duplicate handles for dirs
+  HANDLE changeHandle = ::FindFirstChangeNotificationW(
+      wpath->c_str(), /*bWatchSubtree=*/false,
+      // @@@ audit list
+      /*dwNotifyFilter=*/
+      FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+          FILE_NOTIFY_CHANGE_ATTRIBUTES | FILE_NOTIFY_CHANGE_SIZE |
+          FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SECURITY);
+  if (changeHandle == INVALID_HANDLE_VALUE) {
+    std::fprintf(stderr, "fatal: FindFirstChangeNotificationW failed: %d\n",
+                 ::GetLastError());
+    QLJS_UNIMPLEMENTED();  // @@@
+  }
+  this->watched_directories_.emplace_back(changeHandle);
 }
 #endif
 }
