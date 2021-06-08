@@ -49,6 +49,14 @@ namespace {
 #if QLJS_HAVE_INOTIFY
 std::vector<posix_fd_file> garbage_inotify_fds;
 #endif
+
+#if defined(_WIN32)
+#if NDEBUG
+#define QLJS_LOG(...) do { } while (false)
+#else
+#define QLJS_LOG(...) do { ::std::fprintf(stderr, __VA_ARGS__); } while (false)
+#endif
+#endif
 }
 
 configuration_change_detector_impl::configuration_change_detector_impl(
@@ -556,7 +564,7 @@ void configuration_filesystem_win32::watch_directory(
                   *reinterpret_cast<watched_directory*>(lpParameter);
             std::unique_lock guard(dir.self->watched_directories_mutex_);
               QLJS_ASSERT(!TimerOrWaitFired);
-              fprintf(stderr, "@@@!\n");
+            QLJS_LOG("note: Oplock broke for directory handle %#llx. Somebody probably moved the directory or an ancestor\n", reinterpret_cast<unsigned long long>(dir.directory_handle.get()));
               dir.directory_handle.close();
             },
             /*Context=*/&dir,
@@ -588,8 +596,6 @@ void configuration_filesystem_win32::watch_directory(
                  ::GetLastError());
     QLJS_UNIMPLEMENTED();  // @@@
   }
-  std::fprintf(stderr, "ReadDirectoryChangesW started overlapped=%p\n",
-               &dir.read_changes_overlapped);
 }
 
 void configuration_filesystem_win32::run_io_thread() {

@@ -137,7 +137,8 @@ struct configuration_change_detector {
 
     return config_changes;
 #elif defined(_WIN32)
-    DWORD timeoutMilliseconds = 1000; // @@@ very slow =[
+      // HACK(strager): A non-zero timeout is necessary because configuration_filesystem_win32 is implemented using asynchronous I/O (with an I/O Completion Port pumped by a background thread).
+    DWORD timeoutMilliseconds = 100;
     DWORD rc = ::WaitForSingleObject(this->fs_.get_change_event().get(), timeoutMilliseconds);
     if (rc == WAIT_FAILED) {
       ADD_FAILURE() << "WaitForSingleObject failed: " << ::GetLastError();
