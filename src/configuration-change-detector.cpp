@@ -548,7 +548,6 @@ void configuration_filesystem_win32::watch_directory(
     QLJS_ASSERT(inserted);
     dir = &watched_directory_it->second;
   }
-  // QLJS_LOG("@@@ new overlapped=%p\n", &dir->oplock_overlapped);
 
   // https://github.com/pauldotknopf/WindowsSDK7-Samples/blob/3f2438b15c59fdc104c13e2cf6cf46c1b16cf281/winbase/io/Oplocks/Oplocks/Oplocks.cpp
   // "An RH oplock on a directory breaks to R when the directory itself is
@@ -593,10 +592,7 @@ void configuration_filesystem_win32::run_io_thread() {
         /*dwMilliseconds=*/INFINITE);
     DWORD error = ok ? 0 : ::GetLastError();
     if (!ok) {
-      if (error == ERROR_OPERATION_ABORTED) {
-        // @@@
-        // continue;
-      } else {
+      if (error != ERROR_OPERATION_ABORTED) {
         QLJS_UNIMPLEMENTED();
       }
     }
@@ -607,12 +603,12 @@ void configuration_filesystem_win32::run_io_thread() {
       watched_directory& dir =
           *watched_directory::from_oplock_overlapped(overlapped);
       auto directory_it = this->find_watched_directory(&dir);
-      // if (!aborted) {
-      // QLJS_LOG("@@@ %s overlapped=%p number_of_bytes_transferred=%llx\n",
-      //         error ? "aborted" : "broke", overlapped,
-      //         (unsigned long long)number_of_bytes_transferred);
-      //}
+
       if (!aborted) {
+          // A directory oplock breaks if any of the following happens:
+          // * The directory or any of its ancestors is renamed. The rename blocks until we release the oplock.
+          // * A file in the directory is created, modified, or deleted.
+  // https://docs.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_request_oplock
         QLJS_LOG(
             "note: Directory handle %#llx: %s: Oplock broke\n",
             reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
