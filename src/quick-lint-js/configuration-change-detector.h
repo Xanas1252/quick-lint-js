@@ -155,29 +155,18 @@ class configuration_filesystem_win32 : public configuration_filesystem {
  private:
   struct watched_directory {
     explicit watched_directory([[maybe_unused]] const canonical_path &directory_path, HANDLE
-                                   directory_handle,
-                               configuration_filesystem_win32* self)
+                                   directory_handle)
         : 
         #if !NDEBUG
         directory_path(directory_path),
         #endif
-         directory_handle(directory_handle), self(self) {
-      this->read_changes_overlapped.hEvent =
-          ::CreateEventW(/*lpEventAttributes=*/nullptr, /*bManualReset=*/false,
-                         /*bInitialState=*/false, /*lpName=*/nullptr); // @@@ check
-
-      this->read_changes_overlapped.Offset = read_changes_overlapped_offset;
-      this->oplock_overlapped.Offset = oplock_overlapped_offset;
+         directory_handle(directory_handle) {
+      this->oplock_overlapped.Offset = 0;
+      this->oplock_overlapped.OffsetHigh = 0;
+      this->oplock_overlapped.hEvent = nullptr;
     }
 
     windows_handle_file directory_handle;
-    configuration_filesystem_win32* self;
-
-    OVERLAPPED read_changes_overlapped;
-    struct {
-      FILE_NOTIFY_INFORMATION info;
-      wchar_t name[1024];  // @@@ needed?
-    } buffer;
 
     OVERLAPPED oplock_overlapped;
     REQUEST_OPLOCK_OUTPUT_BUFFER oplock_response;
@@ -186,14 +175,7 @@ class configuration_filesystem_win32 : public configuration_filesystem {
     canonical_path directory_path;
     #endif
 
-    static watched_directory* from_read_changes_overlapped(
-        OVERLAPPED*) noexcept;
     static watched_directory* from_oplock_overlapped(OVERLAPPED*) noexcept;
-
-    enum overlapped_offset : DWORD {
-        oplock_overlapped_offset = 0,
-        read_changes_overlapped_offset = 0xffffffffUL,
-    };
   };
 
   enum completion_key : ULONG_PTR {
