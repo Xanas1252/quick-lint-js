@@ -213,7 +213,7 @@ class configuration_filesystem_win32 : public configuration_filesystem {
   std::thread io_thread_;
 
   std::mutex watched_directories_mutex_;
-  std::condition_variable watched_directory_cancelled_;
+  std::condition_variable watched_directory_unwatched_;
   std::unordered_map<canonical_path, watched_directory> watched_directories_;
 };
 #endif

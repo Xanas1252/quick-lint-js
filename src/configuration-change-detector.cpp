@@ -528,7 +528,7 @@ void configuration_filesystem_win32::watch_directory(
         //@@@ we should return. return;
     }
 
-    //QLJS_LOG("@@@ reuse overlapped=%p\n", &dir.oplock_overlapped);
+    QLJS_LOG("@@@ reuse overlapped=%p\n", &dir->oplock_overlapped);
     if (dir->valid()) {
       QLJS_LOG("note: Directory handle %#llx: %s: Directory identity changed\n",
                reinterpret_cast<unsigned long long>(dir->directory_handle.get()),
@@ -544,7 +544,7 @@ void configuration_filesystem_win32::watch_directory(
         }
       }
       // Wait for the I/O thread to recognize and respond to the cancellation by deleting the watched_directory.
-      this->watched_directory_cancelled_.wait(lock, [&] {
+      this->watched_directory_unwatched_.wait(lock, [&] {
         return this->watched_directories_.count(directory) == 0;
       });
       auto [watched_directory_it, inserted] =
@@ -555,11 +555,10 @@ void configuration_filesystem_win32::watch_directory(
     } else {
         // @@@ delete; shouldn't happen
       dir->directory_handle = windows_handle_file(directory_handle);
+        QLJS_UNREACHABLE();
     }
   }
-  if (inserted) {
-    //QLJS_LOG("@@@ new overlapped=%p\n", &dir.oplock_overlapped);
-  }
+    QLJS_LOG("@@@ new overlapped=%p\n", &dir->oplock_overlapped);
 
   // https://github.com/pauldotknopf/WindowsSDK7-Samples/blob/3f2438b15c59fdc104c13e2cf6cf46c1b16cf281/winbase/io/Oplocks/Oplocks/Oplocks.cpp
   // "An RH oplock on a directory breaks to R when the directory itself is renamed or deleted." https://docs.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_request_oplock
@@ -614,13 +613,13 @@ void configuration_filesystem_win32::run_io_thread() {
       std::unique_lock guard(this->watched_directories_mutex_);
       watched_directory& dir =
             *watched_directory::from_oplock_overlapped(overlapped);
-      if (error == 0) {
-        //QLJS_LOG("@@@ %s overlapped=%p number_of_bytes_transferred=%llx\n",
-        //         error ? "aborted" : "broke", overlapped,
-        //         (unsigned long long)number_of_bytes_transferred);
-      }
-      QLJS_ASSERT(dir.valid());
-      if (error == 0) {
+      bool aborted = error == ERROR_OPERATION_ABORTED;
+      //if (!aborted) {
+        QLJS_LOG("@@@ %s overlapped=%p number_of_bytes_transferred=%llx\n",
+                 error ? "aborted" : "broke", overlapped,
+                 (unsigned long long)number_of_bytes_transferred);
+      //}
+      if (!aborted) {
         QLJS_LOG(
             "note: Directory handle %#llx: %s: Oplock broke\n",
             reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
@@ -628,23 +627,19 @@ void configuration_filesystem_win32::run_io_thread() {
         QLJS_ASSERT(number_of_bytes_transferred == sizeof(dir.oplock_response));
         QLJS_ASSERT(dir.oplock_response.Flags &
                    REQUEST_OPLOCK_OUTPUT_FLAG_ACK_REQUIRED);
-
       }
         auto directory_it = this->find_watched_directory(&dir);
         QLJS_ASSERT(directory_it != this->watched_directories_.end());
         // Erasing dir will close dir.directory_handle, releasing the oplock.
         this->watched_directories_.erase(directory_it);
-        //dir.directory_handle.close();
+          this->watched_directory_unwatched_.notify_all();
 
-        this->watched_directory_cancelled_.notify_all();
-
-        ZeroMemory(&dir.oplock_response, sizeof(dir.oplock_response));//@@@ temporary
-
-        BOOL ok = ::SetEvent(this->change_event_.get());
-        if (!ok) {
-          QLJS_UNIMPLEMENTED();
+        if (!aborted) {
+          BOOL ok = ::SetEvent(this->change_event_.get());
+          if (!ok) {
+            QLJS_UNIMPLEMENTED();
+          }
         }
-
         break;
       }
 
