@@ -166,6 +166,10 @@ class configuration_filesystem_win32 : public configuration_filesystem {
       this->oplock_overlapped.hEvent = nullptr;
     }
 
+    // Copying or moving a watched_directory is impossible. Pending I/O operations maintain pointers into a watched_directory.
+    watched_directory(const watched_directory&) = delete;
+    watched_directory &operator=(const watched_directory&) = delete;
+
     windows_handle_file directory_handle;
 
     OVERLAPPED oplock_overlapped;
@@ -194,6 +198,10 @@ class configuration_filesystem_win32 : public configuration_filesystem {
 
   std::mutex watched_directories_mutex_;
   // @@@ double check: does deque have stable ptrs? if so, use deque instead of list
+  // @@@ needs:
+  // 1. stable pointers for watched_directory
+  // 2. delete entry from watched_directory*
+  // 3. fastish lookup from canonical_path
   std::list<watched_directory> watched_directories_;
 };
 #endif

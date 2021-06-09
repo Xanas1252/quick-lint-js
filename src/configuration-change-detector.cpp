@@ -556,9 +556,9 @@ void configuration_filesystem_win32::run_io_thread() {
     }
     switch (completion_key) {
     case completion_key::directory: {
-        watched_directory& dir =
+      std::unique_lock guard(this->watched_directories_mutex_);
+      watched_directory& dir =
             *watched_directory::from_oplock_overlapped(overlapped);
-        std::unique_lock guard(this->watched_directories_mutex_);
         QLJS_ASSERT(dir.oplock_response.Flags &
                     REQUEST_OPLOCK_OUTPUT_FLAG_ACK_REQUIRED);
         QLJS_LOG(
