@@ -474,19 +474,19 @@ void configuration_filesystem_win32::watch_directory(
 
   std::unique_lock lock(this->watched_directories_mutex_);
 
-    HANDLE directory_handle = ::CreateFileW(
+    windows_handle_file directory_handle(::CreateFileW(
       wpath->c_str(), /*dwDesiredAccess=*/GENERIC_READ,
       /*dwShareMode=*/FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE,
       /*lpSecurityAttributes=*/nullptr,
       /*dwCreationDisposition=*/OPEN_EXISTING,
       /*dwFlagsAndAttributes=*/FILE_ATTRIBUTE_NORMAL |
           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
-      /*hTemplateFile=*/nullptr);
-  if (directory_handle == INVALID_HANDLE_VALUE) {
+      /*hTemplateFile=*/nullptr));
+  if (!directory_handle.valid()) {
     QLJS_UNIMPLEMENTED();  // @@@
   }
   HANDLE iocp = ::CreateIoCompletionPort(
-      /*FileHandle=*/directory_handle,
+      /*FileHandle=*/directory_handle.get(),
       /*ExistingCompletionPort=*/this->io_completion_port_.get(),
       /*CompletionKey=*/completion_key::directory, /*NumberOfConcurrentThreads=*/1);
   if (iocp != this->io_completion_port_.get()) {
@@ -494,14 +494,14 @@ void configuration_filesystem_win32::watch_directory(
   }
 
   FILE_ID_INFO directory_id;
-  if (!::GetFileInformationByHandleEx(directory_handle, ::FileIdInfo,
+  if (!::GetFileInformationByHandleEx(directory_handle.get(), ::FileIdInfo,
                                       &directory_id, sizeof(directory_id))) {
     QLJS_UNIMPLEMENTED();
   }
 
   auto [watched_directory_it, inserted] = this->watched_directories_.try_emplace(
       directory, directory,
-                                             directory_handle, directory_id);
+                                             std::move(directory_handle), directory_id);
   
   watched_directory* dir = &watched_directory_it->second;
   if (!inserted) {
@@ -535,7 +535,7 @@ void configuration_filesystem_win32::watch_directory(
       });
       auto [watched_directory_it, inserted] =
           this->watched_directories_.try_emplace(
-              directory, directory, directory_handle, directory_id);
+              directory, directory, std::move(directory_handle), directory_id);
       QLJS_ASSERT(inserted);
       dir = &watched_directory_it->second;
   }

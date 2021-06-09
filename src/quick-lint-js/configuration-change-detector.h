@@ -155,12 +155,14 @@ class configuration_filesystem_win32 : public configuration_filesystem {
 
  private:
   struct watched_directory {
-    explicit watched_directory([[maybe_unused]] const canonical_path &directory_path, HANDLE directory_handle, const ::FILE_ID_INFO &directory_id)
+    explicit watched_directory([[maybe_unused]] const canonical_path &directory_path,
+        windows_handle_file &&directory_handle,
+        const ::FILE_ID_INFO& directory_id)
         : 
         #if !NDEBUG
         directory_path(directory_path),
         #endif
-         directory_handle(directory_handle),
+         directory_handle(std::move(directory_handle)),
     directory_id(directory_id)
     {
       QLJS_ASSERT(this->directory_handle.valid());
@@ -168,11 +170,6 @@ class configuration_filesystem_win32 : public configuration_filesystem {
       this->oplock_overlapped.Offset = 0;
       this->oplock_overlapped.OffsetHigh = 0;
       this->oplock_overlapped.hEvent = nullptr;
-
-      // @@@ testing
-      this->oplock_overlapped.hEvent =
-          ::CreateEventW(/*lpEventAttributes=*/nullptr, /*bManualReset=*/false,
-                         /*bInitialState=*/false, /*lpName=*/nullptr);
     }
 
     // Copying or moving a watched_directory is impossible. Pending I/O operations maintain pointers into a watched_directory.
