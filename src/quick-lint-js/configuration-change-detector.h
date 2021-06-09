@@ -155,22 +155,8 @@ class configuration_filesystem_win32 : public configuration_filesystem {
 
  private:
   struct watched_directory {
-    explicit watched_directory([[maybe_unused]] const canonical_path &directory_path,
-        windows_handle_file &&directory_handle,
-        const ::FILE_ID_INFO& directory_id)
-        : 
-        #if !NDEBUG
-        directory_path(directory_path),
-        #endif
-         directory_handle(std::move(directory_handle)),
-    directory_id(directory_id)
-    {
-      QLJS_ASSERT(this->directory_handle.valid());
-
-      this->oplock_overlapped.Offset = 0;
-      this->oplock_overlapped.OffsetHigh = 0;
-      this->oplock_overlapped.hEvent = nullptr;
-    }
+    explicit watched_directory(windows_handle_file&& directory_handle,
+                               const ::FILE_ID_INFO& directory_id);
 
     // Copying or moving a watched_directory is impossible. Pending I/O operations maintain pointers into a watched_directory.
     watched_directory(const watched_directory&) = delete;
@@ -184,9 +170,7 @@ class configuration_filesystem_win32 : public configuration_filesystem {
     ::OVERLAPPED oplock_overlapped;
     ::REQUEST_OPLOCK_OUTPUT_BUFFER oplock_response;
 
-    #if !NDEBUG
-    canonical_path directory_path;
-    #endif
+    void begin_cancel();
 
     static watched_directory* from_oplock_overlapped(OVERLAPPED*) noexcept;
   };
@@ -198,11 +182,13 @@ class configuration_filesystem_win32 : public configuration_filesystem {
 
   void watch_directory(const canonical_path&);
 
-  // Assumption: watched_directories_mutex_ is held.
-  std::unordered_map<canonical_path, watched_directory>::iterator find_watched_directory(
-      watched_directory*);
-
   void run_io_thread();
+
+  std::unordered_map<canonical_path, watched_directory>::iterator find_watched_directory(
+      std::unique_lock<std::mutex>&, watched_directory*);
+  void wait_until_all_watches_cancelled(std::unique_lock<std::mutex>&);
+  void wait_until_watch_cancelled(std::unique_lock<std::mutex>&,
+                                  const canonical_path& directory);
 
   windows_handle_file change_event_;
 
@@ -212,6 +198,8 @@ class configuration_filesystem_win32 : public configuration_filesystem {
   std::mutex watched_directories_mutex_;
   std::condition_variable watched_directory_unwatched_;
   std::unordered_map<canonical_path, watched_directory> watched_directories_;
+  void handle_directory_event(OVERLAPPED* overlapped,
+                              DWORD number_of_bytes_transferred, DWORD error);
 };
 #endif
 }
