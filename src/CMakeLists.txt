@@ -33,6 +33,7 @@ quick_lint_js_add_library(
   c-api.cpp
   char8.cpp
   cli-location.cpp
+  configuration-change-detector-inotify.cpp
   configuration-change-detector.cpp
   configuration-loader.cpp
   configuration.cpp
