@@ -10,9 +10,9 @@
 #include <quick-lint-js/file-canonical.h>
 #include <quick-lint-js/file-handle.h>
 #include <quick-lint-js/file.h>
-#include <quick-lint-js/unreachable.h>
 #include <quick-lint-js/have.h>
 #include <quick-lint-js/narrow-cast.h>
+#include <quick-lint-js/unreachable.h>
 #include <quick-lint-js/utf-16.h>
 #include <string>
 #include <string_view>
@@ -53,9 +53,14 @@ std::vector<posix_fd_file> garbage_inotify_fds;
 
 #if defined(_WIN32)
 #if NDEBUG
-#define QLJS_LOG(...) do { } while (false)
+#define QLJS_LOG(...) \
+  do {                \
+  } while (false)
 #else
-#define QLJS_LOG(...) do { ::std::fprintf(stderr, __VA_ARGS__); } while (false)
+#define QLJS_LOG(...)                    \
+  do {                                   \
+    ::std::fprintf(stderr, __VA_ARGS__); \
+  } while (false)
 #endif
 #endif
 }
@@ -393,8 +398,13 @@ void configuration_filesystem_kqueue::watch_file(posix_fd_file_ref file) {
 
 #if defined(_WIN32)
 configuration_filesystem_win32::configuration_filesystem_win32()
-    : change_event_(::CreateEventW(/*lpEventAttributes=*/nullptr, /*bManualReset=*/false, /*bInitialState=*/false, /*lpName=*/nullptr)),
-    io_completion_port_(::CreateIoCompletionPort(/*FileHandle=*/INVALID_HANDLE_VALUE, /*ExistingCompletionPort=*/nullptr, /*CompletionKey=*/0, /*NumberOfConcurrentThreads=*/1)) {
+    : change_event_(
+          ::CreateEventW(/*lpEventAttributes=*/nullptr, /*bManualReset=*/false,
+                         /*bInitialState=*/false, /*lpName=*/nullptr)),
+      io_completion_port_(::CreateIoCompletionPort(
+          /*FileHandle=*/INVALID_HANDLE_VALUE,
+          /*ExistingCompletionPort=*/nullptr, /*CompletionKey=*/0,
+          /*NumberOfConcurrentThreads=*/1)) {
   if (this->io_completion_port_.get() == nullptr) {
     QLJS_UNIMPLEMENTED();
   }
@@ -405,26 +415,25 @@ configuration_filesystem_win32::~configuration_filesystem_win32() {
   {
     std::unique_lock lock(this->watched_directories_mutex_);
 
-    for (auto& [directory_path, dir]: this->watched_directories_) {
-        BOOL ok = ::CancelIoEx(dir.directory_handle.get(), nullptr);
-        if (!ok) {
-          DWORD error = ::GetLastError();
-          if (error == ERROR_NOT_FOUND) {
-            // @@@ probably shouldn't happen, but it does.
-          } else {
-            QLJS_UNIMPLEMENTED();
-          }
+    for (auto& [directory_path, dir] : this->watched_directories_) {
+      BOOL ok = ::CancelIoEx(dir.directory_handle.get(), nullptr);
+      if (!ok) {
+        DWORD error = ::GetLastError();
+        if (error == ERROR_NOT_FOUND) {
+            // TODO(strager): Figure out why this error happens sometimes.
+        } else {
+          QLJS_UNIMPLEMENTED();
         }
+      }
     }
 
-      // Wait for the I/O thread to recognize and respond to the cancellations by
-      // deleting all the watched_directory entries.
-      this->watched_directory_unwatched_.wait(lock, [&] {
-        return this->watched_directories_.empty();
-      });
+    // Wait for the I/O thread to recognize and respond to the cancellations by
+    // deleting all the watched_directory entries.
+    this->watched_directory_unwatched_.wait(
+        lock, [&] { return this->watched_directories_.empty(); });
   }
 
-    BOOL ok = ::PostQueuedCompletionStatus(
+  BOOL ok = ::PostQueuedCompletionStatus(
       /*CompletionPort=*/this->io_completion_port_.get(),
       /*dwNumberOfBytesTransferred=*/0,
       /*dwCompletionKey=*/completion_key::stop_io_thread,
@@ -459,22 +468,21 @@ void configuration_filesystem_win32::process_changes(
   detector.refresh(out_changes);
 }
 
-windows_handle_file_ref configuration_filesystem_win32::get_change_event()
-    noexcept {
+windows_handle_file_ref
+configuration_filesystem_win32::get_change_event() noexcept {
   return this->change_event_.ref();
 }
 
 void configuration_filesystem_win32::watch_directory(
     const canonical_path& directory) {
-  std::optional<std::wstring> wpath =
-      mbstring_to_wstring(directory.c_str());
+  std::optional<std::wstring> wpath = mbstring_to_wstring(directory.c_str());
   if (!wpath.has_value()) {
     QLJS_UNIMPLEMENTED();
   }
 
   std::unique_lock lock(this->watched_directories_mutex_);
 
-    windows_handle_file directory_handle(::CreateFileW(
+  windows_handle_file directory_handle(::CreateFileW(
       wpath->c_str(), /*dwDesiredAccess=*/GENERIC_READ,
       /*dwShareMode=*/FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE,
       /*lpSecurityAttributes=*/nullptr,
@@ -488,7 +496,8 @@ void configuration_filesystem_win32::watch_directory(
   HANDLE iocp = ::CreateIoCompletionPort(
       /*FileHandle=*/directory_handle.get(),
       /*ExistingCompletionPort=*/this->io_completion_port_.get(),
-      /*CompletionKey=*/completion_key::directory, /*NumberOfConcurrentThreads=*/1);
+      /*CompletionKey=*/completion_key::directory,
+      /*NumberOfConcurrentThreads=*/1);
   if (iocp != this->io_completion_port_.get()) {
     QLJS_UNIMPLEMENTED();
   }
@@ -499,10 +508,10 @@ void configuration_filesystem_win32::watch_directory(
     QLJS_UNIMPLEMENTED();
   }
 
-  auto [watched_directory_it, inserted] = this->watched_directories_.try_emplace(
-      directory, directory,
-                                             std::move(directory_handle), directory_id);
-  
+  auto [watched_directory_it, inserted] =
+      this->watched_directories_.try_emplace(
+          directory, directory, std::move(directory_handle), directory_id);
+
   watched_directory* dir = &watched_directory_it->second;
   if (!inserted) {
     bool already_watched =
@@ -513,45 +522,47 @@ void configuration_filesystem_win32::watch_directory(
                     sizeof(directory_id.FileId)) == 0;
 
     if (already_watched) {
-        //@@@ we should return. return;
+      //@@@ we should return. return;
     }
 
-      QLJS_LOG("note: Directory handle %#llx: %s: Directory identity changed\n",
-               reinterpret_cast<unsigned long long>(dir->directory_handle.get()),
-               directory.c_str());
-      // @@@ put this sucker in a function.
-      BOOL ok = ::CancelIoEx(dir->directory_handle.get(), nullptr);
-      if (!ok) {
-        DWORD error = ::GetLastError();
-        if (error == ERROR_NOT_FOUND) {
-          // @@@ probably shouldn't happen, but it does.
-        } else {
-          QLJS_UNIMPLEMENTED();
-        }
+    QLJS_LOG("note: Directory handle %#llx: %s: Directory identity changed\n",
+             reinterpret_cast<unsigned long long>(dir->directory_handle.get()),
+             directory.c_str());
+    // @@@ put this sucker in a function.
+    BOOL ok = ::CancelIoEx(dir->directory_handle.get(), nullptr);
+    if (!ok) {
+      DWORD error = ::GetLastError();
+      if (error == ERROR_NOT_FOUND) {
+        // TODO(strager): Figure out why this error happens sometimes.
+      } else {
+        QLJS_UNIMPLEMENTED();
       }
-      // Wait for the I/O thread to recognize and respond to the cancellation by deleting the watched_directory.
-      this->watched_directory_unwatched_.wait(lock, [&] {
-        return this->watched_directories_.count(directory) == 0;
-      });
-      auto [watched_directory_it, inserted] =
-          this->watched_directories_.try_emplace(
-              directory, directory, std::move(directory_handle), directory_id);
-      QLJS_ASSERT(inserted);
-      dir = &watched_directory_it->second;
+    }
+    // Wait for the I/O thread to recognize and respond to the cancellation by
+    // deleting the watched_directory.
+    this->watched_directory_unwatched_.wait(
+        lock, [&] { return this->watched_directories_.count(directory) == 0; });
+    auto [watched_directory_it, inserted] =
+        this->watched_directories_.try_emplace(
+            directory, directory, std::move(directory_handle), directory_id);
+    QLJS_ASSERT(inserted);
+    dir = &watched_directory_it->second;
   }
-    //QLJS_LOG("@@@ new overlapped=%p\n", &dir->oplock_overlapped);
+  // QLJS_LOG("@@@ new overlapped=%p\n", &dir->oplock_overlapped);
 
   // https://github.com/pauldotknopf/WindowsSDK7-Samples/blob/3f2438b15c59fdc104c13e2cf6cf46c1b16cf281/winbase/io/Oplocks/Oplocks/Oplocks.cpp
-  // "An RH oplock on a directory breaks to R when the directory itself is renamed or deleted." https://docs.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_request_oplock
+  // "An RH oplock on a directory breaks to R when the directory itself is
+  // renamed or deleted."
+  // https://docs.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_request_oplock
   REQUEST_OPLOCK_INPUT_BUFFER request;
-    request.StructureVersion = REQUEST_OPLOCK_CURRENT_VERSION;
+  request.StructureVersion = REQUEST_OPLOCK_CURRENT_VERSION;
   request.StructureLength = sizeof(REQUEST_OPLOCK_INPUT_BUFFER);
-    request.RequestedOplockLevel = OPLOCK_LEVEL_CACHE_READ |
-                                 OPLOCK_LEVEL_CACHE_HANDLE;
+  request.RequestedOplockLevel =
+      OPLOCK_LEVEL_CACHE_READ | OPLOCK_LEVEL_CACHE_HANDLE;
   request.Flags = REQUEST_OPLOCK_INPUT_FLAG_REQUEST;
   BOOL okie =
       ::DeviceIoControl(/*hDevice=*/dir->directory_handle.get(),
-                                /*dwIoControlCode=*/FSCTL_REQUEST_OPLOCK,
+                        /*dwIoControlCode=*/FSCTL_REQUEST_OPLOCK,
                         /*lpInBuffer=*/&request,
                         /*nInBufferSize=*/sizeof(request),
                         /*lpOutBuffer=*/&dir->oplock_response,
@@ -562,7 +573,7 @@ void configuration_filesystem_win32::watch_directory(
   } else {
     DWORD error = ::GetLastError();
     if (error == ERROR_IO_PENDING) {
-        // Do nothing. run_io_thread will handle the oplock breaking.
+      // Do nothing. run_io_thread will handle the oplock breaking.
     } else {
       QLJS_UNIMPLEMENTED();  // @@@
     }
@@ -584,49 +595,51 @@ void configuration_filesystem_win32::run_io_thread() {
     if (!ok) {
       if (error == ERROR_OPERATION_ABORTED) {
         // @@@
-        //continue;
+        // continue;
       } else {
         QLJS_UNIMPLEMENTED();
       }
     }
     switch (completion_key) {
     case completion_key::directory: {
+      bool aborted = error == ERROR_OPERATION_ABORTED;
       std::unique_lock guard(this->watched_directories_mutex_);
       watched_directory& dir =
-            *watched_directory::from_oplock_overlapped(overlapped);
-      bool aborted = error == ERROR_OPERATION_ABORTED;
-      //if (!aborted) {
-        //QLJS_LOG("@@@ %s overlapped=%p number_of_bytes_transferred=%llx\n",
-        //         error ? "aborted" : "broke", overlapped,
-        //         (unsigned long long)number_of_bytes_transferred);
+          *watched_directory::from_oplock_overlapped(overlapped);
+      auto directory_it = this->find_watched_directory(&dir);
+      // if (!aborted) {
+      // QLJS_LOG("@@@ %s overlapped=%p number_of_bytes_transferred=%llx\n",
+      //         error ? "aborted" : "broke", overlapped,
+      //         (unsigned long long)number_of_bytes_transferred);
       //}
       if (!aborted) {
         QLJS_LOG(
             "note: Directory handle %#llx: %s: Oplock broke\n",
             reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
-            dir.directory_path.c_str());
+            directory_it->first.c_str());
         QLJS_ASSERT(number_of_bytes_transferred == sizeof(dir.oplock_response));
         QLJS_ASSERT(dir.oplock_response.Flags &
-                   REQUEST_OPLOCK_OUTPUT_FLAG_ACK_REQUIRED);
+                    REQUEST_OPLOCK_OUTPUT_FLAG_ACK_REQUIRED);
       }
-        auto directory_it = this->find_watched_directory(&dir);
-        // Erasing the watched_directory will close dir.directory_handle, releasing the oplock.
-        this->watched_directories_.erase(directory_it);
-          this->watched_directory_unwatched_.notify_all();
 
-        if (!aborted) {
-          BOOL ok = ::SetEvent(this->change_event_.get());
-          if (!ok) {
-            QLJS_UNIMPLEMENTED();
-          }
+      // Erasing the watched_directory will close dir.directory_handle,
+      // releasing the oplock.
+      this->watched_directories_.erase(directory_it);
+      this->watched_directory_unwatched_.notify_all();
+
+      if (!aborted) {
+        BOOL ok = ::SetEvent(this->change_event_.get());
+        if (!ok) {
+          QLJS_UNIMPLEMENTED();
         }
-        break;
       }
+      break;
+    }
 
     case completion_key::stop_io_thread:
       return;
 
-      default:
+    default:
       QLJS_UNREACHABLE();
     }
   }
@@ -634,7 +647,7 @@ void configuration_filesystem_win32::run_io_thread() {
 
 std::unordered_map<canonical_path,
                    configuration_filesystem_win32::watched_directory>::iterator
-configuration_filesystem_win32::find_watched_directory(watched_directory*dir) {
+configuration_filesystem_win32::find_watched_directory(watched_directory* dir) {
   auto directory_it = std::find_if(
       this->watched_directories_.begin(), this->watched_directories_.end(),
       [&](const auto& entry) { return &entry.second == dir; });

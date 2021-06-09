@@ -181,8 +181,8 @@ class configuration_filesystem_win32 : public configuration_filesystem {
     windows_handle_file directory_handle;
     ::FILE_ID_INFO directory_id;
 
-    OVERLAPPED oplock_overlapped;
-    REQUEST_OPLOCK_OUTPUT_BUFFER oplock_response;
+    ::OVERLAPPED oplock_overlapped;
+    ::REQUEST_OPLOCK_OUTPUT_BUFFER oplock_response;
 
     #if !NDEBUG
     canonical_path directory_path;
