@@ -400,9 +400,9 @@ void configuration_filesystem_kqueue::watch_file(posix_fd_file_ref file) {
 namespace {
 windows_handle_file create_windows_event() noexcept;
 windows_handle_file create_io_completion_port() noexcept;
-void attach_handle_to_iocp(
-    windows_handle_file_ref handle, windows_handle_file_ref iocp,
-    ULONG_PTR completionKey) noexcept;
+void attach_handle_to_iocp(windows_handle_file_ref handle,
+                           windows_handle_file_ref iocp,
+                           ULONG_PTR completionKey) noexcept;
 bool file_ids_equal(const FILE_ID_INFO&, const FILE_ID_INFO&) noexcept;
 }
 
@@ -584,7 +584,8 @@ void configuration_filesystem_win32::run_io_thread() {
     }
     switch (completion_key) {
     case completion_key::directory:
-      this->handle_directory_event(overlapped, number_of_bytes_transferred, error);
+      this->handle_directory_event(overlapped, number_of_bytes_transferred,
+                                   error);
       break;
 
     case completion_key::stop_io_thread:
@@ -613,10 +614,9 @@ void configuration_filesystem_win32::handle_directory_event(
     // * A file in the directory is created, modified, or deleted.
     //
     // https://docs.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_request_oplock
-    QLJS_LOG(
-        "note: Directory handle %#llx: %s: Oplock broke\n",
-        reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
-        directory_it->first.c_str());
+    QLJS_LOG("note: Directory handle %#llx: %s: Oplock broke\n",
+             reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
+             directory_it->first.c_str());
     QLJS_ASSERT(number_of_bytes_transferred == sizeof(dir.oplock_response));
     QLJS_ASSERT(dir.oplock_response.Flags &
                 REQUEST_OPLOCK_OUTPUT_FLAG_ACK_REQUIRED);
@@ -637,7 +637,8 @@ void configuration_filesystem_win32::handle_directory_event(
 
 std::unordered_map<canonical_path,
                    configuration_filesystem_win32::watched_directory>::iterator
-configuration_filesystem_win32::find_watched_directory(std::unique_lock<std::mutex>&, watched_directory* dir) {
+configuration_filesystem_win32::find_watched_directory(
+    std::unique_lock<std::mutex>&, watched_directory* dir) {
   auto directory_it = std::find_if(
       this->watched_directories_.begin(), this->watched_directories_.end(),
       [&](const auto& entry) { return &entry.second == dir; });
@@ -660,8 +661,7 @@ void configuration_filesystem_win32::wait_until_watch_cancelled(
 configuration_filesystem_win32::watched_directory::watched_directory(
     windows_handle_file&& directory_handle, const FILE_ID_INFO& directory_id)
     : directory_handle(std::move(directory_handle)),
-      directory_id(directory_id)
-{
+      directory_id(directory_id) {
   QLJS_ASSERT(this->directory_handle.valid());
 
   this->oplock_overlapped.Offset = 0;
@@ -711,9 +711,9 @@ windows_handle_file create_io_completion_port() noexcept {
   return iocp;
 }
 
-void attach_handle_to_iocp(
-    windows_handle_file_ref handle, windows_handle_file_ref iocp,
-    ULONG_PTR completionKey) noexcept {
+void attach_handle_to_iocp(windows_handle_file_ref handle,
+                           windows_handle_file_ref iocp,
+                           ULONG_PTR completionKey) noexcept {
   HANDLE iocp2 = CreateIoCompletionPort(
       /*FileHandle=*/handle.get(),
       /*ExistingCompletionPort=*/iocp.get(),
@@ -725,10 +725,8 @@ void attach_handle_to_iocp(
 }
 
 bool file_ids_equal(const FILE_ID_INFO& a, const FILE_ID_INFO& b) noexcept {
-  return b.VolumeSerialNumber ==
-         a.VolumeSerialNumber &&
-         memcmp(&b.FileId, &a.FileId,
-                sizeof(b.FileId)) == 0;
+  return b.VolumeSerialNumber == a.VolumeSerialNumber &&
+         memcmp(&b.FileId, &a.FileId, sizeof(b.FileId)) == 0;
 }
 }
 #endif

@@ -4,7 +4,10 @@
 #ifndef QUICK_LINT_JS_CONFIGURATION_CHANGE_DETECTOR_H
 #define QUICK_LINT_JS_CONFIGURATION_CHANGE_DETECTOR_H
 
+#include <condition_variable>
+#include <list>  // @@@
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <quick-lint-js/configuration.h>
 #include <quick-lint-js/file-canonical.h>
@@ -14,9 +17,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <list> // @@@
-#include <mutex>
-#include <condition_variable>
 
 #if QLJS_HAVE_KQUEUE
 #include <sys/event.h>
@@ -158,9 +158,10 @@ class configuration_filesystem_win32 : public configuration_filesystem {
     explicit watched_directory(windows_handle_file&& directory_handle,
                                const ::FILE_ID_INFO& directory_id);
 
-    // Copying or moving a watched_directory is impossible. Pending I/O operations maintain pointers into a watched_directory.
+    // Copying or moving a watched_directory is impossible. Pending I/O
+    // operations maintain pointers into a watched_directory.
     watched_directory(const watched_directory&) = delete;
-    watched_directory &operator=(const watched_directory&) = delete;
+    watched_directory& operator=(const watched_directory&) = delete;
 
     bool valid() const noexcept { return this->directory_handle.valid(); }
 
@@ -176,16 +177,16 @@ class configuration_filesystem_win32 : public configuration_filesystem {
   };
 
   enum completion_key : ULONG_PTR {
-      stop_io_thread = 1,
-      directory,
+    stop_io_thread = 1,
+    directory,
   };
 
   void watch_directory(const canonical_path&);
 
   void run_io_thread();
 
-  std::unordered_map<canonical_path, watched_directory>::iterator find_watched_directory(
-      std::unique_lock<std::mutex>&, watched_directory*);
+  std::unordered_map<canonical_path, watched_directory>::iterator
+  find_watched_directory(std::unique_lock<std::mutex>&, watched_directory*);
   void wait_until_all_watches_cancelled(std::unique_lock<std::mutex>&);
   void wait_until_watch_cancelled(std::unique_lock<std::mutex>&,
                                   const canonical_path& directory);

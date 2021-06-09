@@ -11,8 +11,8 @@
 #include <quick-lint-js/file-path.h>
 #include <quick-lint-js/file.h>
 #include <quick-lint-js/have.h>
-#include <quick-lint-js/utf-16.h>
 #include <quick-lint-js/temporary-directory.h>
+#include <quick-lint-js/utf-16.h>
 #include <quick-lint-js/warning.h>
 #include <string>
 #include <sys/stat.h>
@@ -71,9 +71,7 @@ struct configuration_change_detector {
     QLJS_ASSERT(this->kqueue_fd.valid());
   }
 #elif defined(_WIN32)
-  explicit configuration_change_detector()
-      : impl_(&this->fs_) {
-  }
+  explicit configuration_change_detector() : impl_(&this->fs_) {}
 #endif
 
   configuration* get_config_for_file(const std::string& path) {
@@ -138,9 +136,12 @@ struct configuration_change_detector {
 
     return config_changes;
 #elif defined(_WIN32)
-      // HACK(strager): A non-zero timeout is necessary because configuration_filesystem_win32 is implemented using asynchronous I/O (with an I/O Completion Port pumped by a background thread).
+    // HACK(strager): A non-zero timeout is necessary because
+    // configuration_filesystem_win32 is implemented using asynchronous I/O
+    // (with an I/O Completion Port pumped by a background thread).
     DWORD timeoutMilliseconds = 100;
-    DWORD rc = ::WaitForSingleObject(this->fs_.get_change_event().get(), timeoutMilliseconds);
+    DWORD rc = ::WaitForSingleObject(this->fs_.get_change_event().get(),
+                                     timeoutMilliseconds);
     if (rc == WAIT_FAILED) {
       ADD_FAILURE() << "WaitForSingleObject failed: " << ::GetLastError();
       return {};
@@ -938,28 +939,29 @@ TEST_F(test_configuration_change_detector,
   detector.get_config_for_file(js_file);
 
   {
-      #if defined(_WIN32)
-      std::optional<std::wstring> wide_config_file =
-          mbstring_to_wstring(config_file.c_str());
-      ASSERT_TRUE(wide_config_file.has_value())
-          << windows_error_message(::GetLastError());
-      windows_handle_file handle(::CreateFileW(
-          wide_config_file->c_str(),
-          /*dwDesiredAccess=*/GENERIC_READ | GENERIC_WRITE,
-          /*dwShareMode=*/FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE,
-          /*lpSecurityAttributes=*/nullptr,
-          /*dwCreationDisposition=*/OPEN_EXISTING,
-          /*dwFlagsAndAttributes=*/FILE_ATTRIBUTE_NORMAL,
-          /*hTemplateFile=*/nullptr));
-      ASSERT_TRUE(handle.valid()) << windows_error_message(::GetLastError());
+#if defined(_WIN32)
+    std::optional<std::wstring> wide_config_file =
+        mbstring_to_wstring(config_file.c_str());
+    ASSERT_TRUE(wide_config_file.has_value())
+        << windows_error_message(::GetLastError());
+    windows_handle_file handle(::CreateFileW(
+        wide_config_file->c_str(),
+        /*dwDesiredAccess=*/GENERIC_READ | GENERIC_WRITE,
+        /*dwShareMode=*/FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE,
+        /*lpSecurityAttributes=*/nullptr,
+        /*dwCreationDisposition=*/OPEN_EXISTING,
+        /*dwFlagsAndAttributes=*/FILE_ATTRIBUTE_NORMAL,
+        /*hTemplateFile=*/nullptr));
+    ASSERT_TRUE(handle.valid()) << windows_error_message(::GetLastError());
 #else
     posix_fd_file handle(::open(config_file.c_str(), O_RDWR | O_EXCL));
     ASSERT_TRUE(handle.valid()) << std::strerror(errno);
-      #endif
-      ASSERT_TRUE(handle.seek_to(strlen(u8R"({"globals": {")")))
-          << handle.get_last_error_message();
-      ASSERT_EQ(handle.write(u8"after_", 6), 6) << handle.get_last_error_message();
-    }
+#endif
+    ASSERT_TRUE(handle.seek_to(strlen(u8R"({"globals": {")")))
+        << handle.get_last_error_message();
+    ASSERT_EQ(handle.write(u8"after_", 6), 6)
+        << handle.get_last_error_message();
+  }
 
   std::vector<configuration_change> changes =
       poll_and_process_changes(detector);

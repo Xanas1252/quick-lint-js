@@ -35,8 +35,7 @@
 namespace quick_lint_js {
 #if QLJS_HAVE_WINDOWS_H
 windows_handle_file_ref::windows_handle_file_ref(HANDLE handle) noexcept
-    : handle_(handle) {
-}
+    : handle_(handle) {}
 
 bool windows_handle_file_ref::valid() const noexcept {
   return this->handle_ != this->invalid_handle_1 &&
@@ -105,7 +104,8 @@ windows_handle_file::windows_handle_file(HANDLE handle) noexcept
     : windows_handle_file_ref(handle) {}
 
 windows_handle_file::windows_handle_file(windows_handle_file &&other) noexcept
-    : windows_handle_file_ref(std::exchange(other.handle_, this->invalid_handle_1)) {}
+    : windows_handle_file_ref(
+          std::exchange(other.handle_, this->invalid_handle_1)) {}
 
 windows_handle_file &windows_handle_file::operator=(
     windows_handle_file &&other) noexcept {
@@ -122,9 +122,9 @@ windows_handle_file::~windows_handle_file() {
   }
 }
 
-  void windows_handle_file::close() {
+void windows_handle_file::close() {
   QLJS_ASSERT(this->valid());
-    if (!::CloseHandle(this->handle_)) {
+  if (!::CloseHandle(this->handle_)) {
     std::fprintf(stderr, "error: failed to close file\n");
   }
   this->handle_ = this->invalid_handle_1;
