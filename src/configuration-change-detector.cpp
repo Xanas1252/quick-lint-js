@@ -406,28 +406,31 @@ configuration_filesystem_win32::~configuration_filesystem_win32() {
     std::unique_lock guard(this->watched_directories_mutex_);
 
     for (auto& [directory_path, dir]: this->watched_directories_) {
-      [[maybe_unused]] BOOL ok =
-          ::CancelIoEx(dir.directory_handle.get(), nullptr);
-      if (!ok) {
-        DWORD error = ::GetLastError();
-        if (error == ERROR_NOT_FOUND) {
-          // @@@ probably shouldn't happen, but it does.
-        } else {
-          QLJS_UNIMPLEMENTED();
+      if (dir.valid()) {
+        BOOL ok = ::CancelIoEx(dir.directory_handle.get(), nullptr);
+        if (!ok) {
+          DWORD error = ::GetLastError();
+          if (error == ERROR_NOT_FOUND) {
+            // @@@ probably shouldn't happen, but it does.
+          } else {
+            QLJS_UNIMPLEMENTED();
+          }
         }
       }
     }
     for (auto& [directory_path, dir] : this->watched_directories_) {
-      [[maybe_unused]] DWORD bytes_transferred;
-      BOOL ok = ::GetOverlappedResult(dir.directory_handle.get(),
-                                      &dir.oplock_overlapped,
-                                      &bytes_transferred, /*bWait=*/true);
-      if (!ok) {
-        DWORD error = ::GetLastError();
-        if (error == ERROR_OPERATION_ABORTED) {
-          // Expected: CancelIoEx succeeded.
-        } else {
-          QLJS_UNIMPLEMENTED();
+      if (dir.valid()) {
+        [[maybe_unused]] DWORD bytes_transferred;
+        BOOL ok = ::GetOverlappedResult(dir.directory_handle.get(),
+                                        &dir.oplock_overlapped,
+                                        &bytes_transferred, /*bWait=*/true);
+        if (!ok) {
+          DWORD error = ::GetLastError();
+          if (error == ERROR_OPERATION_ABORTED) {
+            // Expected: CancelIoEx succeeded.
+          } else {
+            QLJS_UNIMPLEMENTED();
+          }
         }
       }
     }
@@ -481,7 +484,8 @@ void configuration_filesystem_win32::watch_directory(
     QLJS_UNIMPLEMENTED();
   }
 
-  std::unique_lock guard(this->watched_directories_mutex_);
+  std::unique_lock lock(this->watched_directories_mutex_);
+
     HANDLE directory_handle = ::CreateFileW(
       wpath->c_str(), /*dwDesiredAccess=*/GENERIC_READ,
       /*dwShareMode=*/FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -514,6 +518,7 @@ void configuration_filesystem_win32::watch_directory(
   watched_directory& dir = watched_directory_it->second;
   if (!inserted) {
     bool already_watched =
+        !dir.valid() &&
         directory_id.VolumeSerialNumber ==
             dir.directory_id.VolumeSerialNumber &&
         std::memcmp(&directory_id.FileId, &dir.directory_id.FileId,
@@ -521,12 +526,14 @@ void configuration_filesystem_win32::watch_directory(
 
     if (already_watched) {
       // @@@ deadlocks if we don't return here.
-        return;
+        //return;
     }
 
-    QLJS_LOG("note: Directory handle %#llx: %s: Directory identity changed\n",
-             reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
-        directory.c_str());
+    QLJS_LOG("@@@ reuse overlapped=%p\n", &dir.oplock_overlapped);
+    if (dir.valid()) {
+      QLJS_LOG("note: Directory handle %#llx: %s: Directory identity changed\n",
+               reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
+               directory.c_str());
       // @@@ put this sucker in a function.
       BOOL ok = ::CancelIoEx(dir.directory_handle.get(), nullptr);
       if (!ok) {
@@ -537,21 +544,16 @@ void configuration_filesystem_win32::watch_directory(
           QLJS_UNIMPLEMENTED();
         }
       }
-      [[maybe_unused]] DWORD bytes_transferred;
-      ok = ::GetOverlappedResult(dir.directory_handle.get(),
-                                 &dir.oplock_overlapped, &bytes_transferred,
-                                 /*bWait=*/true);
-      if (!ok) {
-        DWORD error = ::GetLastError();
-        if (error == ERROR_OPERATION_ABORTED) {
-          // Expected: CancelIoEx succeeded.
-        } else {
-          QLJS_UNIMPLEMENTED();
-        }
-      }
+      // Wait for the I/O thread to recognize and respond to the cancellation.
+      this->watched_directory_cancelled_.wait(lock, [&] { return !dir.valid();
+          });
+    }
 
     dir.directory_handle =
         windows_handle_file(directory_handle);
+  }
+  if (inserted) {
+    QLJS_LOG("@@@ new overlapped=%p\n", &dir.oplock_overlapped);
   }
 
   // https://github.com/pauldotknopf/WindowsSDK7-Samples/blob/3f2438b15c59fdc104c13e2cf6cf46c1b16cf281/winbase/io/Oplocks/Oplocks/Oplocks.cpp
@@ -593,11 +595,11 @@ void configuration_filesystem_win32::run_io_thread() {
         /*lpCompletionKey=*/&completion_key,
         /*lpOverlapped=*/&overlapped,
         /*dwMilliseconds=*/INFINITE);
+    DWORD error = ok ? 0 : ::GetLastError();
     if (!ok) {
-      DWORD error = ::GetLastError();
       if (error == ERROR_OPERATION_ABORTED) {
         // @@@
-        continue;
+        //continue;
       } else {
         QLJS_UNIMPLEMENTED();
       }
@@ -610,17 +612,29 @@ void configuration_filesystem_win32::run_io_thread() {
       // @@@ fires, but why?
         //QLJS_ASSERT(dir.oplock_response.Flags &
         //            REQUEST_OPLOCK_OUTPUT_FLAG_ACK_REQUIRED);
+      if (error == 0) {
+        QLJS_LOG("@@@ %s overlapped=%p number_of_bytes_transferred=%llx\n",
+                 error ? "aborted" : "broke", overlapped,
+                 (unsigned long long)number_of_bytes_transferred);
+      }
+      QLJS_ASSERT(dir.valid());
+      if (error == 0) {
         QLJS_LOG(
             "note: Directory handle %#llx: %s: Oplock broke\n",
             reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
             dir.directory_path.c_str());
-        //dir.directory_handle.close();
+      }
         auto directory_it = this->find_watched_directory(&dir);
         QLJS_ASSERT(directory_it != this->watched_directories_.end());
         // Erasing dir will close dir.directory_handle, releasing the oplock.
-        this->watched_directories_.erase(directory_it);
+        //@@@ this->watched_directories_.erase(directory_it);
+        dir.directory_handle.close();
 
-                BOOL ok = ::SetEvent(this->change_event_.get());
+        this->watched_directory_cancelled_.notify_all();
+
+        ZeroMemory(&dir.oplock_response, sizeof(dir.oplock_response));//@@@ temporary
+
+        BOOL ok = ::SetEvent(this->change_event_.get());
         if (!ok) {
           QLJS_UNIMPLEMENTED();
         }

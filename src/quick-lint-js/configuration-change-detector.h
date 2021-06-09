@@ -16,6 +16,7 @@
 #include <vector>
 #include <list> // @@@
 #include <mutex>
+#include <condition_variable>
 
 #if QLJS_HAVE_KQUEUE
 #include <sys/event.h>
@@ -162,14 +163,23 @@ class configuration_filesystem_win32 : public configuration_filesystem {
          directory_handle(directory_handle),
     directory_id(directory_id)
     {
+      QLJS_ASSERT(this->directory_handle.valid());
+
       this->oplock_overlapped.Offset = 0;
       this->oplock_overlapped.OffsetHigh = 0;
       this->oplock_overlapped.hEvent = nullptr;
+
+      // @@@ testing
+      this->oplock_overlapped.hEvent =
+          ::CreateEventW(/*lpEventAttributes=*/nullptr, /*bManualReset=*/false,
+                         /*bInitialState=*/false, /*lpName=*/nullptr);
     }
 
     // Copying or moving a watched_directory is impossible. Pending I/O operations maintain pointers into a watched_directory.
     watched_directory(const watched_directory&) = delete;
     watched_directory &operator=(const watched_directory&) = delete;
+
+    bool valid() const noexcept { return this->directory_handle.valid(); }
 
     windows_handle_file directory_handle;
     ::FILE_ID_INFO directory_id;
@@ -203,6 +213,7 @@ class configuration_filesystem_win32 : public configuration_filesystem {
   std::thread io_thread_;
 
   std::mutex watched_directories_mutex_;
+  std::condition_variable watched_directory_cancelled_;
   std::unordered_map<canonical_path, watched_directory> watched_directories_;
 };
 #endif
