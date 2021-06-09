@@ -403,10 +403,9 @@ configuration_filesystem_win32::configuration_filesystem_win32()
 
 configuration_filesystem_win32::~configuration_filesystem_win32() {
   {
-    std::unique_lock guard(this->watched_directories_mutex_);
+    std::unique_lock lock(this->watched_directories_mutex_);
 
     for (auto& [directory_path, dir]: this->watched_directories_) {
-      if (dir.valid()) {
         BOOL ok = ::CancelIoEx(dir.directory_handle.get(), nullptr);
         if (!ok) {
           DWORD error = ::GetLastError();
@@ -416,24 +415,13 @@ configuration_filesystem_win32::~configuration_filesystem_win32() {
             QLJS_UNIMPLEMENTED();
           }
         }
-      }
     }
-    for (auto& [directory_path, dir] : this->watched_directories_) {
-      if (dir.valid()) {
-        [[maybe_unused]] DWORD bytes_transferred;
-        BOOL ok = ::GetOverlappedResult(dir.directory_handle.get(),
-                                        &dir.oplock_overlapped,
-                                        &bytes_transferred, /*bWait=*/true);
-        if (!ok) {
-          DWORD error = ::GetLastError();
-          if (error == ERROR_OPERATION_ABORTED) {
-            // Expected: CancelIoEx succeeded.
-          } else {
-            QLJS_UNIMPLEMENTED();
-          }
-        }
-      }
-    }
+
+      // Wait for the I/O thread to recognize and respond to the cancellations by
+      // deleting all the watched_directory entries.
+      this->watched_directory_unwatched_.wait(lock, [&] {
+        return this->watched_directories_.empty();
+      });
   }
 
     BOOL ok = ::PostQueuedCompletionStatus(
@@ -528,8 +516,6 @@ void configuration_filesystem_win32::watch_directory(
         //@@@ we should return. return;
     }
 
-    QLJS_LOG("@@@ reuse overlapped=%p\n", &dir->oplock_overlapped);
-    if (dir->valid()) {
       QLJS_LOG("note: Directory handle %#llx: %s: Directory identity changed\n",
                reinterpret_cast<unsigned long long>(dir->directory_handle.get()),
                directory.c_str());
@@ -552,13 +538,8 @@ void configuration_filesystem_win32::watch_directory(
               directory, directory, directory_handle, directory_id);
       QLJS_ASSERT(inserted);
       dir = &watched_directory_it->second;
-    } else {
-        // @@@ delete; shouldn't happen
-      dir->directory_handle = windows_handle_file(directory_handle);
-        QLJS_UNREACHABLE();
-    }
   }
-    QLJS_LOG("@@@ new overlapped=%p\n", &dir->oplock_overlapped);
+    //QLJS_LOG("@@@ new overlapped=%p\n", &dir->oplock_overlapped);
 
   // https://github.com/pauldotknopf/WindowsSDK7-Samples/blob/3f2438b15c59fdc104c13e2cf6cf46c1b16cf281/winbase/io/Oplocks/Oplocks/Oplocks.cpp
   // "An RH oplock on a directory breaks to R when the directory itself is renamed or deleted." https://docs.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_request_oplock
@@ -615,9 +596,9 @@ void configuration_filesystem_win32::run_io_thread() {
             *watched_directory::from_oplock_overlapped(overlapped);
       bool aborted = error == ERROR_OPERATION_ABORTED;
       //if (!aborted) {
-        QLJS_LOG("@@@ %s overlapped=%p number_of_bytes_transferred=%llx\n",
-                 error ? "aborted" : "broke", overlapped,
-                 (unsigned long long)number_of_bytes_transferred);
+        //QLJS_LOG("@@@ %s overlapped=%p number_of_bytes_transferred=%llx\n",
+        //         error ? "aborted" : "broke", overlapped,
+        //         (unsigned long long)number_of_bytes_transferred);
       //}
       if (!aborted) {
         QLJS_LOG(
@@ -629,8 +610,7 @@ void configuration_filesystem_win32::run_io_thread() {
                    REQUEST_OPLOCK_OUTPUT_FLAG_ACK_REQUIRED);
       }
         auto directory_it = this->find_watched_directory(&dir);
-        QLJS_ASSERT(directory_it != this->watched_directories_.end());
-        // Erasing dir will close dir.directory_handle, releasing the oplock.
+        // Erasing the watched_directory will close dir.directory_handle, releasing the oplock.
         this->watched_directories_.erase(directory_it);
           this->watched_directory_unwatched_.notify_all();
 
@@ -655,9 +635,11 @@ void configuration_filesystem_win32::run_io_thread() {
 std::unordered_map<canonical_path,
                    configuration_filesystem_win32::watched_directory>::iterator
 configuration_filesystem_win32::find_watched_directory(watched_directory*dir) {
-  return std::find_if(
+  auto directory_it = std::find_if(
       this->watched_directories_.begin(), this->watched_directories_.end(),
       [&](const auto& entry) { return &entry.second == dir; });
+  QLJS_ASSERT(directory_it != this->watched_directories_.end());
+  return directory_it;
 }
 
 configuration_filesystem_win32::watched_directory*
