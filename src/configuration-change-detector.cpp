@@ -397,17 +397,36 @@ void configuration_filesystem_kqueue::watch_file(posix_fd_file_ref file) {
 #endif
 
 #if defined(_WIN32)
+namespace {
+windows_handle_file create_windows_event() noexcept;
+windows_handle_file create_io_completion_port() noexcept;
+}
+
+// configuration_filesystem_win32 implements directory and file change
+// notifications using a little-known feature called oplocks.
+//
+// For each directory we want to watch, we acquire an oplock. When a change
+// happens, the oplock is broken and we are notified.
+//
+// Well-known APIs, such as FindFirstChangeNotificationW and
+// ReadDirectoryChangesW, don't work because they hold a directory handle. This
+// handle prevents renaming any ancestor directory. Directory handles with an
+// oplock don't have this problem.
+//
+// Documentation on oplocks:
+// * https://github.com/pauldotknopf/WindowsSDK7-Samples/blob/3f2438b15c59fdc104c13e2cf6cf46c1b16cf281/winbase/io/Oplocks/Oplocks/Oplocks.cpp
+// * https://docs.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_request_oplock
+//
+// When an oplock is broken, the directory handle is signalled. We could wait
+// for the directory handles using WaitForMultipleObjects, but WFMO has a limit
+// of 64 handles. This limit is low for our use case. To wait for any number of
+// directory handles, we wait for events using an I/O completion port
+// (io_completion_port_) pumped on a background thread (io_thread_). The
+// background thread signals that a refresh is necessary using an event
+// (change_event_).
 configuration_filesystem_win32::configuration_filesystem_win32()
-    : change_event_(
-          ::CreateEventW(/*lpEventAttributes=*/nullptr, /*bManualReset=*/false,
-                         /*bInitialState=*/false, /*lpName=*/nullptr)),
-      io_completion_port_(::CreateIoCompletionPort(
-          /*FileHandle=*/INVALID_HANDLE_VALUE,
-          /*ExistingCompletionPort=*/nullptr, /*CompletionKey=*/0,
-          /*NumberOfConcurrentThreads=*/1)) {
-  if (this->io_completion_port_.get() == nullptr) {
-    QLJS_UNIMPLEMENTED();
-  }
+    : change_event_(create_windows_event()),
+      io_completion_port_(create_io_completion_port()) {
   this->io_thread_ = std::thread([this]() -> void { this->run_io_thread(); });
 }
 
@@ -420,7 +439,7 @@ configuration_filesystem_win32::~configuration_filesystem_win32() {
       if (!ok) {
         DWORD error = ::GetLastError();
         if (error == ERROR_NOT_FOUND) {
-            // TODO(strager): Figure out why this error happens sometimes.
+          // TODO(strager): Figure out why this error happens sometimes.
         } else {
           QLJS_UNIMPLEMENTED();
         }
@@ -480,8 +499,6 @@ void configuration_filesystem_win32::watch_directory(
     QLJS_UNIMPLEMENTED();
   }
 
-  std::unique_lock lock(this->watched_directories_mutex_);
-
   windows_handle_file directory_handle(::CreateFileW(
       wpath->c_str(), /*dwDesiredAccess=*/GENERIC_READ,
       /*dwShareMode=*/FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -493,36 +510,26 @@ void configuration_filesystem_win32::watch_directory(
   if (!directory_handle.valid()) {
     QLJS_UNIMPLEMENTED();  // @@@
   }
-  HANDLE iocp = ::CreateIoCompletionPort(
-      /*FileHandle=*/directory_handle.get(),
-      /*ExistingCompletionPort=*/this->io_completion_port_.get(),
-      /*CompletionKey=*/completion_key::directory,
-      /*NumberOfConcurrentThreads=*/1);
-  if (iocp != this->io_completion_port_.get()) {
-    QLJS_UNIMPLEMENTED();
-  }
-
   FILE_ID_INFO directory_id;
   if (!::GetFileInformationByHandleEx(directory_handle.get(), ::FileIdInfo,
                                       &directory_id, sizeof(directory_id))) {
     QLJS_UNIMPLEMENTED();
   }
 
+  std::unique_lock lock(this->watched_directories_mutex_);
+
   auto [watched_directory_it, inserted] =
       this->watched_directories_.try_emplace(
           directory, directory, std::move(directory_handle), directory_id);
-
   watched_directory* dir = &watched_directory_it->second;
   if (!inserted) {
     bool already_watched =
-        !dir->valid() &&
         directory_id.VolumeSerialNumber ==
             dir->directory_id.VolumeSerialNumber &&
         std::memcmp(&directory_id.FileId, &dir->directory_id.FileId,
                     sizeof(directory_id.FileId)) == 0;
-
     if (already_watched) {
-      //@@@ we should return. return;
+      return;
     }
 
     QLJS_LOG("note: Directory handle %#llx: %s: Directory identity changed\n",
@@ -542,6 +549,7 @@ void configuration_filesystem_win32::watch_directory(
     // deleting the watched_directory.
     this->watched_directory_unwatched_.wait(
         lock, [&] { return this->watched_directories_.count(directory) == 0; });
+
     auto [watched_directory_it, inserted] =
         this->watched_directories_.try_emplace(
             directory, directory, std::move(directory_handle), directory_id);
@@ -549,32 +557,40 @@ void configuration_filesystem_win32::watch_directory(
     dir = &watched_directory_it->second;
   }
 
-  // https://github.com/pauldotknopf/WindowsSDK7-Samples/blob/3f2438b15c59fdc104c13e2cf6cf46c1b16cf281/winbase/io/Oplocks/Oplocks/Oplocks.cpp
-  // "An RH oplock on a directory breaks to R when the directory itself is
-  // renamed or deleted."
-  // https://docs.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_request_oplock
-  REQUEST_OPLOCK_INPUT_BUFFER request;
-  request.StructureVersion = REQUEST_OPLOCK_CURRENT_VERSION;
-  request.StructureLength = sizeof(REQUEST_OPLOCK_INPUT_BUFFER);
-  request.RequestedOplockLevel =
-      OPLOCK_LEVEL_CACHE_READ | OPLOCK_LEVEL_CACHE_HANDLE;
-  request.Flags = REQUEST_OPLOCK_INPUT_FLAG_REQUEST;
-  BOOL okie =
-      ::DeviceIoControl(/*hDevice=*/dir->directory_handle.get(),
-                        /*dwIoControlCode=*/FSCTL_REQUEST_OPLOCK,
-                        /*lpInBuffer=*/&request,
-                        /*nInBufferSize=*/sizeof(request),
-                        /*lpOutBuffer=*/&dir->oplock_response,
-                        /*nOutBufferSize=*/sizeof(dir->oplock_response),
-                        /*lpBytesReturned=*/nullptr, &dir->oplock_overlapped);
-  if (okie) {
+  HANDLE iocp = ::CreateIoCompletionPort(
+      /*FileHandle=*/dir->directory_handle.get(),
+      /*ExistingCompletionPort=*/this->io_completion_port_.get(),
+      /*CompletionKey=*/completion_key::directory,
+      /*NumberOfConcurrentThreads=*/1);
+  if (iocp != this->io_completion_port_.get()) {
+    QLJS_UNIMPLEMENTED();
+  }
+
+  REQUEST_OPLOCK_INPUT_BUFFER request = {
+      .StructureVersion = REQUEST_OPLOCK_CURRENT_VERSION,
+      .StructureLength = sizeof(REQUEST_OPLOCK_INPUT_BUFFER),
+      .RequestedOplockLevel =
+          OPLOCK_LEVEL_CACHE_READ | OPLOCK_LEVEL_CACHE_HANDLE,
+      .Flags = REQUEST_OPLOCK_INPUT_FLAG_REQUEST,
+  };
+  BOOL ok = ::DeviceIoControl(/*hDevice=*/dir->directory_handle.get(),
+                              /*dwIoControlCode=*/FSCTL_REQUEST_OPLOCK,
+                              /*lpInBuffer=*/&request,
+                              /*nInBufferSize=*/sizeof(request),
+                              /*lpOutBuffer=*/&dir->oplock_response,
+                              /*nOutBufferSize=*/sizeof(dir->oplock_response),
+                              /*lpBytesReturned=*/nullptr,
+                              /*lpOverlapped=*/&dir->oplock_overlapped);
+  if (ok) {
+    // TODO(strager): Can this happen? I assume if this happens, the oplock was
+    // immediately broken.
     QLJS_UNIMPLEMENTED();
   } else {
     DWORD error = ::GetLastError();
     if (error == ERROR_IO_PENDING) {
-      // Do nothing. run_io_thread will handle the oplock breaking.
+      // run_io_thread will handle the oplock breaking.
     } else {
-      QLJS_UNIMPLEMENTED();  // @@@
+      QLJS_UNIMPLEMENTED();
     }
   }
 }
@@ -605,10 +621,11 @@ void configuration_filesystem_win32::run_io_thread() {
       auto directory_it = this->find_watched_directory(&dir);
 
       if (!aborted) {
-          // A directory oplock breaks if any of the following happens:
-          // * The directory or any of its ancestors is renamed. The rename blocks until we release the oplock.
-          // * A file in the directory is created, modified, or deleted.
-  // https://docs.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_request_oplock
+        // A directory oplock breaks if any of the following happens:
+        // * The directory or any of its ancestors is renamed. The rename blocks
+        // until we release the oplock.
+        // * A file in the directory is created, modified, or deleted.
+        // https://docs.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_request_oplock
         QLJS_LOG(
             "note: Directory handle %#llx: %s: Oplock broke\n",
             reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
@@ -657,6 +674,29 @@ configuration_filesystem_win32::watched_directory::from_oplock_overlapped(
   return reinterpret_cast<watched_directory*>(
       reinterpret_cast<std::uintptr_t>(overlapped) -
       offsetof(watched_directory, oplock_overlapped));
+}
+
+namespace {
+windows_handle_file create_windows_event() noexcept {
+  windows_handle_file event(
+      ::CreateEventW(/*lpEventAttributes=*/nullptr, /*bManualReset=*/false,
+                     /*bInitialState=*/false, /*lpName=*/nullptr));
+  if (!event.valid()) {
+    QLJS_UNIMPLEMENTED();
+  }
+  return event;
+}
+
+windows_handle_file create_io_completion_port() noexcept {
+  windows_handle_file iocp(::CreateIoCompletionPort(
+      /*FileHandle=*/INVALID_HANDLE_VALUE,
+      /*ExistingCompletionPort=*/nullptr, /*CompletionKey=*/0,
+      /*NumberOfConcurrentThreads=*/1));
+  if (!iocp.valid()) {
+    QLJS_UNIMPLEMENTED();
+  }
+  return iocp;
+}
 }
 #endif
 }
