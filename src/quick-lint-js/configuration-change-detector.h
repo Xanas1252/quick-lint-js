@@ -197,12 +197,7 @@ class configuration_filesystem_win32 : public configuration_filesystem {
   std::thread io_thread_;
 
   std::mutex watched_directories_mutex_;
-  // @@@ double check: does deque have stable ptrs? if so, use deque instead of list
-  // @@@ needs:
-  // 1. stable pointers for watched_directory
-  // 2. delete entry from watched_directory*
-  // 3. fastish lookup from canonical_path
-  std::list<watched_directory> watched_directories_;
+  std::unordered_map<canonical_path, watched_directory> watched_directories_;
 };
 #endif
 }

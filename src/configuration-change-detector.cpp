@@ -405,7 +405,7 @@ configuration_filesystem_win32::~configuration_filesystem_win32() {
   {
     std::unique_lock guard(this->watched_directories_mutex_);
 
-    for (watched_directory& dir : this->watched_directories_) {
+    for (auto& [directory_path, dir]: this->watched_directories_) {
       if (dir.directory_handle.get() == nullptr) {
         continue;  // @@@ hack for now
       }
@@ -420,7 +420,7 @@ configuration_filesystem_win32::~configuration_filesystem_win32() {
         }
       }
     }
-    for (watched_directory& dir : this->watched_directories_) {
+    for (auto& [directory_path, dir] : this->watched_directories_) {
       [[maybe_unused]] DWORD bytes_transferred;
       BOOL ok = ::GetOverlappedResult(dir.directory_handle.get(),
                                       &dir.oplock_overlapped,
@@ -503,8 +503,41 @@ void configuration_filesystem_win32::watch_directory(
   if (iocp != this->io_completion_port_.get()) {
     QLJS_UNIMPLEMENTED();
   }
-  watched_directory& dir =
-      this->watched_directories_.emplace_back(directory, directory_handle);
+
+  auto [watched_directory_it, inserted] = this->watched_directories_.try_emplace(
+      directory,
+      directory, directory_handle);
+  watched_directory& dir = watched_directory_it->second;
+  if (!inserted) {
+    if (dir.directory_handle
+            .valid()) {  // @@@ remove check when we fix the io thread
+                         // @@@ put this sucker in a function.
+      BOOL ok = ::CancelIoEx(dir.directory_handle.get(), nullptr);
+      if (!ok) {
+        DWORD error = ::GetLastError();
+        if (error == ERROR_NOT_FOUND) {
+          // @@@ probably shouldn't happen, but it does.
+        } else {
+          QLJS_UNIMPLEMENTED();
+        }
+      }
+      [[maybe_unused]] DWORD bytes_transferred;
+      ok = ::GetOverlappedResult(dir.directory_handle.get(),
+                                 &dir.oplock_overlapped, &bytes_transferred,
+                                 /*bWait=*/true);
+      if (!ok) {
+        DWORD error = ::GetLastError();
+        if (error == ERROR_OPERATION_ABORTED) {
+          // Expected: CancelIoEx succeeded.
+        } else {
+          QLJS_UNIMPLEMENTED();
+        }
+      }
+    }
+
+    dir.directory_handle =
+        windows_handle_file(directory_handle);
+  }
 
   // https://github.com/pauldotknopf/WindowsSDK7-Samples/blob/3f2438b15c59fdc104c13e2cf6cf46c1b16cf281/winbase/io/Oplocks/Oplocks/Oplocks.cpp
   // "An RH oplock on a directory breaks to R when the directory itself is renamed or deleted." https://docs.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_request_oplock
@@ -559,14 +592,15 @@ void configuration_filesystem_win32::run_io_thread() {
       std::unique_lock guard(this->watched_directories_mutex_);
       watched_directory& dir =
             *watched_directory::from_oplock_overlapped(overlapped);
-        QLJS_ASSERT(dir.oplock_response.Flags &
-                    REQUEST_OPLOCK_OUTPUT_FLAG_ACK_REQUIRED);
+      // @@@ fires, but why?
+        //QLJS_ASSERT(dir.oplock_response.Flags &
+        //            REQUEST_OPLOCK_OUTPUT_FLAG_ACK_REQUIRED);
         QLJS_LOG(
             "note: Directory handle %#llx: %s: Oplock broke\n",
             reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
             dir.directory_path.c_str());
         dir.directory_handle.close();
-        // @@@ we should reopen it or something.
+        // @@@ remove the entry from this->watched_directories_
 
                 BOOL ok = ::SetEvent(this->change_event_.get());
         if (!ok) {

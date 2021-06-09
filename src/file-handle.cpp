@@ -104,6 +104,18 @@ std::string windows_handle_file_ref::get_last_error_message() {
 windows_handle_file::windows_handle_file(HANDLE handle) noexcept
     : windows_handle_file_ref(handle) {}
 
+windows_handle_file::windows_handle_file(windows_handle_file &&other) noexcept
+    : windows_handle_file_ref(std::exchange(other.handle_, this->invalid_handle_1)) {}
+
+windows_handle_file &windows_handle_file::operator=(
+    windows_handle_file &&other) noexcept {
+  std::swap(this->handle_, other.handle_);
+  if (other.valid()) {
+    other.close();
+  }
+  return *this;
+}
+
 windows_handle_file::~windows_handle_file() {
   if (this->valid()) {
     this->close();
@@ -178,14 +190,14 @@ posix_fd_file::posix_fd_file(posix_fd_file &&other) noexcept
 
 posix_fd_file &posix_fd_file::operator=(posix_fd_file &&other) noexcept {
   std::swap(this->fd_, other.fd_);
-  if (other.fd_ != invalid_fd) {
+  if (other.valid()) {
     other.close();
   }
   return *this;
 }
 
 posix_fd_file::~posix_fd_file() {
-  if (this->fd_ != invalid_fd) {
+  if (this->valid()) {
     this->close();
   }
 }
