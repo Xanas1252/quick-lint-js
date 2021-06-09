@@ -54,8 +54,8 @@ class windows_handle_file_ref {
   HANDLE get() noexcept;
 
   file_read_result read(void *buffer, int buffer_size) noexcept;
-  std::optional<int> write(const void *buffer, int buffer_size) noexcept;
   bool seek_to(std::size_t offset) noexcept;
+  std::optional<int> write(const void *buffer, int buffer_size) noexcept;
 
   static std::string get_last_error_message();
 
@@ -106,6 +106,7 @@ class posix_fd_file_ref {
   int get() noexcept;
 
   file_read_result read(void *buffer, int buffer_size) noexcept;
+  bool seek_to(std::size_t offset) noexcept;
   std::optional<int> write(const void *buffer, int buffer_size) noexcept;
 
   static std::string get_last_error_message();
@@ -139,6 +140,7 @@ class posix_fd_file : private posix_fd_file_ref {
   using posix_fd_file_ref::get;
   using posix_fd_file_ref::get_last_error_message;
   using posix_fd_file_ref::read;
+  using posix_fd_file_ref::seek_to;
   using posix_fd_file_ref::valid;
   using posix_fd_file_ref::write;
 };
