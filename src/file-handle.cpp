@@ -36,14 +36,19 @@ namespace quick_lint_js {
 #if QLJS_HAVE_WINDOWS_H
 windows_handle_file_ref::windows_handle_file_ref(HANDLE handle) noexcept
     : handle_(handle) {
-  QLJS_ASSERT(this->handle_ != nullptr);
-  QLJS_ASSERT(this->handle_ != INVALID_HANDLE_VALUE);
+}
+
+bool windows_handle_file_ref::valid() const noexcept {
+  return this->handle_ != this->invalid_handle_1 &&
+         this->handle_ != this->invalid_handle_2;
 }
 
 HANDLE windows_handle_file_ref::get() noexcept { return this->handle_; }
 
 file_read_result windows_handle_file_ref::read(void *buffer,
                                                int buffer_size) noexcept {
+  QLJS_ASSERT(this->valid());
+
   DWORD read_size;
   if (!::ReadFile(this->handle_, buffer, narrow_cast<DWORD>(buffer_size),
                   &read_size,
@@ -76,6 +81,8 @@ file_read_result windows_handle_file_ref::read(void *buffer,
 
 std::optional<int> windows_handle_file_ref::write(const void *buffer,
                                                   int buffer_size) noexcept {
+  QLJS_ASSERT(this->valid());
+
   DWORD write_size;
   if (!::WriteFile(this->handle_, buffer, narrow_cast<DWORD>(buffer_size),
                    &write_size,
@@ -83,6 +90,11 @@ std::optional<int> windows_handle_file_ref::write(const void *buffer,
     return std::nullopt;
   }
   return narrow_cast<int>(write_size);
+}
+
+bool windows_handle_file_ref::seek_to(std::size_t offset) noexcept {
+  return ::SetFilePointer(this->handle_, narrow_cast<DWORD>(offset), nullptr,
+                          FILE_BEGIN) != INVALID_SET_FILE_POINTER;
 }
 
 std::string windows_handle_file_ref::get_last_error_message() {
@@ -93,16 +105,17 @@ windows_handle_file::windows_handle_file(HANDLE handle) noexcept
     : windows_handle_file_ref(handle) {}
 
 windows_handle_file::~windows_handle_file() {
-  if (this->handle_ != this->invalid_handle) {
+  if (this->valid()) {
     this->close();
   }
 }
 
-void windows_handle_file::close() {
-  if (!::CloseHandle(this->handle_)) {
+  void windows_handle_file::close() {
+  QLJS_ASSERT(this->valid());
+    if (!::CloseHandle(this->handle_)) {
     std::fprintf(stderr, "error: failed to close file\n");
   }
-  this->handle_ = this->invalid_handle;
+  this->handle_ = this->invalid_handle_1;
 }
 
 windows_handle_file_ref windows_handle_file::ref() noexcept { return *this; }

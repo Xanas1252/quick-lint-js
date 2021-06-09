@@ -937,27 +937,29 @@ TEST_F(test_configuration_change_detector,
   configuration_change_detector detector;
   detector.get_config_for_file(js_file);
 
-  std::optional<std::wstring> wide_config_file =
-      mbstring_to_wstring(config_file.c_str());
-  ASSERT_TRUE(wide_config_file.has_value()) << windows_error_message(::GetLastError());
-  HANDLE handle = ::CreateFileW(
-      wide_config_file->c_str(), /*dwDesiredAccess=*/GENERIC_READ | GENERIC_WRITE,
-      /*dwShareMode=*/FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE,
-      /*lpSecurityAttributes=*/nullptr,
-      /*dwCreationDisposition=*/OPEN_EXISTING,
-      /*dwFlagsAndAttributes=*/FILE_ATTRIBUTE_NORMAL,
-      /*hTemplateFile=*/nullptr);
-  ASSERT_NE(handle, INVALID_HANDLE_VALUE)
-      << windows_error_message(::GetLastError());
-  ASSERT_NE(::SetFilePointer(handle, strlen(u8R"({"globals": {")"), nullptr, FILE_BEGIN),
-            INVALID_SET_FILE_POINTER)
-      << windows_error_message(::GetLastError());
-  ASSERT_TRUE(::WriteFile(handle, u8"after_", 6,
-                          /*lpNumberOfBytesWritten=*/nullptr,
-                          /*lpOverlapped=*/nullptr))
-      << windows_error_message(::GetLastError());
-  CloseHandle(handle);
-
+  {
+      #if defined(_WIN32)
+      std::optional<std::wstring> wide_config_file =
+          mbstring_to_wstring(config_file.c_str());
+      ASSERT_TRUE(wide_config_file.has_value())
+          << windows_error_message(::GetLastError());
+      windows_handle_file handle(::CreateFileW(
+          wide_config_file->c_str(),
+          /*dwDesiredAccess=*/GENERIC_READ | GENERIC_WRITE,
+          /*dwShareMode=*/FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE,
+          /*lpSecurityAttributes=*/nullptr,
+          /*dwCreationDisposition=*/OPEN_EXISTING,
+          /*dwFlagsAndAttributes=*/FILE_ATTRIBUTE_NORMAL,
+          /*hTemplateFile=*/nullptr));
+      ASSERT_TRUE(handle.valid()) << windows_error_message(::GetLastError());
+#else
+    posix_fd_file handle(::open(config_file.c_str(), O_RDWR | O_EXCL));
+    ASSERT_TRUE(handle.valid()) << std::strerror(errno);
+      #endif
+      ASSERT_TRUE(handle.seek_to(strlen(u8R"({"globals": {")")))
+          << handle.get_last_error_message();
+      ASSERT_EQ(handle.write(u8"after_", 6), 6) << handle.get_last_error_message();
+    }
 
   std::vector<configuration_change> changes =
       poll_and_process_changes(detector);

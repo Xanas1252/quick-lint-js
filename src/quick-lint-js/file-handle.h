@@ -49,15 +49,21 @@ class windows_handle_file_ref {
  public:
   explicit windows_handle_file_ref(HANDLE) noexcept;
 
+  bool valid() const noexcept;
+
   HANDLE get() noexcept;
 
   file_read_result read(void *buffer, int buffer_size) noexcept;
   std::optional<int> write(const void *buffer, int buffer_size) noexcept;
+  bool seek_to(std::size_t offset) noexcept;
 
   static std::string get_last_error_message();
 
  protected:
   HANDLE handle_;
+
+  static constexpr HANDLE invalid_handle_1 = nullptr;
+  static constexpr HANDLE invalid_handle_2 = INVALID_HANDLE_VALUE;
 };
 
 // windows_handle_file is the owner of a Win32 file handle.
@@ -77,10 +83,9 @@ class windows_handle_file : private windows_handle_file_ref {
   using windows_handle_file_ref::get;
   using windows_handle_file_ref::get_last_error_message;
   using windows_handle_file_ref::read;
+  using windows_handle_file_ref::seek_to;
+  using windows_handle_file_ref::valid;
   using windows_handle_file_ref::write;
-
- private:
-  static constexpr HANDLE invalid_handle = nullptr;
 };
 #endif
 
