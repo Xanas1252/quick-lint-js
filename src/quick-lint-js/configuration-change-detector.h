@@ -157,9 +157,12 @@ class configuration_filesystem_win32 : public configuration_filesystem {
     explicit watched_directory(HANDLE directory_handle,
                                configuration_filesystem_win32* self)
         : directory_handle(directory_handle), self(self) {
-      read_changes_overlapped.hEvent =
+      this->read_changes_overlapped.hEvent =
           ::CreateEventW(/*lpEventAttributes=*/nullptr, /*bManualReset=*/false,
                          /*bInitialState=*/false, /*lpName=*/nullptr); // @@@ check
+
+      this->read_changes_overlapped.Offset = read_changes_overlapped_offset;
+      this->oplock_overlapped.Offset = oplock_overlapped_offset;
     }
 
     windows_handle_file directory_handle;
@@ -172,8 +175,14 @@ class configuration_filesystem_win32 : public configuration_filesystem {
     } buffer;
 
     OVERLAPPED oplock_overlapped;
-    HANDLE oplock_wait_handle;
     REQUEST_OPLOCK_OUTPUT_BUFFER oplock_response;
+
+    static watched_directory* from_oplock_overlapped(OVERLAPPED*) noexcept;
+
+    enum overlapped_offset : DWORD {
+        oplock_overlapped_offset = 0,
+        read_changes_overlapped_offset = 0xffffffffUL,
+    };
   };
 
   enum completion_key : ULONG_PTR {

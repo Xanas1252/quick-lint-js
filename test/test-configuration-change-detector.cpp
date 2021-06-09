@@ -944,7 +944,6 @@ TEST_F(test_configuration_change_detector,
   EXPECT_THAT(changes, IsEmpty());
 }
 
-#if !defined(_WIN32) // @@@
 TEST_F(test_configuration_change_detector,
        renaming_file_over_config_is_detected_as_change) {
   std::string project_dir = this->make_temporary_directory();
@@ -990,7 +989,6 @@ TEST_F(test_configuration_change_detector,
       poll_and_process_changes(detector);
   EXPECT_THAT(changes, IsEmpty());
 }
-#endif
 
 TEST_F(test_configuration_change_detector,
        moving_config_file_away_and_back_keeps_config) {
@@ -1013,9 +1011,28 @@ TEST_F(test_configuration_change_detector,
 }
 
 void move_file(const std::string& from, const std::string& to) {
-  EXPECT_EQ(std::rename(from.c_str(), to.c_str()), 0)
-      << "failed to move " << from << " to " << to << ": "
-      << std::strerror(errno);
+  if (std::rename(from.c_str(), to.c_str()) != 0) {
+    int error = errno;
+#if defined(_WIN32)
+    if (error == EEXIST) {
+      BOOL ok = ::ReplaceFileW(
+          /*lpReplacedFileName=*/std::filesystem::path(to).wstring().c_str(),
+          /*lpReplacementFileName=*/
+          std::filesystem::path(from).wstring().c_str(),
+          /*lpBackupFileName=*/nullptr,
+          /*dwReplacemeFlags=*/0,
+          /*lpExclude=*/nullptr,
+          /*lpReserved=*/nullptr);
+      if (!ok) {
+        ADD_FAILURE() << "failed to move " << from << " to " << to << ": "
+                      << windows_handle_file::get_last_error_message();
+      }
+      return;
+    }
+#endif
+    ADD_FAILURE() << "failed to move " << from << " to " << to << ": "
+                  << std::strerror(error);
+  }
 }
 }
 }

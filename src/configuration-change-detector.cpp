@@ -401,15 +401,6 @@ configuration_filesystem_win32::configuration_filesystem_win32()
 }
 
 configuration_filesystem_win32::~configuration_filesystem_win32() {
-  for (watched_directory& dir : this->watched_directories_) {
-    BOOL ok = ::UnregisterWaitEx(/*WaitHandle=*/dir.oplock_wait_handle,
-                                 /*CompletionEvent=*/INVALID_HANDLE_VALUE);
-    if (!ok) {
-      DWORD error = ::GetLastError();
-        QLJS_UNIMPLEMENTED();
-    }
-  }
-
   {
     std::unique_lock guard(this->watched_directories_mutex_);
 
@@ -555,24 +546,7 @@ void configuration_filesystem_win32::watch_directory(
   } else {
     DWORD error = ::GetLastError();
     if (error == ERROR_IO_PENDING) {
-        BOOL ok = ::RegisterWaitForSingleObject(
-            /*phNewWaitObject=*/&dir.oplock_wait_handle,
-            /*hObject=*/dir.oplock_overlapped.hEvent,
-            /*Callback=*/
-            [](PVOID lpParameter, BOOLEAN TimerOrWaitFired) -> void {
-              watched_directory& dir =
-                  *reinterpret_cast<watched_directory*>(lpParameter);
-            std::unique_lock guard(dir.self->watched_directories_mutex_);
-              QLJS_ASSERT(!TimerOrWaitFired);
-            QLJS_LOG("note: Oplock broke for directory handle %#llx. Somebody probably moved the directory or an ancestor\n", reinterpret_cast<unsigned long long>(dir.directory_handle.get()));
-              dir.directory_handle.close();
-            },
-            /*Context=*/&dir,
-            /*dwMilliseconds=*/INFINITE,
-            /*dwFlags=*/WT_EXECUTEDEFAULT);
-        if (!ok) {
-          QLJS_UNIMPLEMENTED();
-        }
+        // Do nothing. run_io_thread will handle the oplock breaking.
     } else {
       QLJS_UNIMPLEMENTED();  // @@@
     }
@@ -619,17 +593,47 @@ void configuration_filesystem_win32::run_io_thread() {
       }
     }
     switch (completion_key) {
-    case completion_key::directory: {
-      BOOL ok = ::SetEvent(this->change_event_.get());
-      if (!ok) {
-        QLJS_UNIMPLEMENTED();
+    case completion_key::directory:
+      switch (overlapped->Offset) {
+      case watched_directory::oplock_overlapped_offset: {
+        watched_directory& dir =
+            *watched_directory::from_oplock_overlapped(overlapped);
+        std::unique_lock guard(this->watched_directories_mutex_);
+        QLJS_LOG(
+            "note: Oplock broke for directory handle %#llx. Somebody probably "
+            "moved the directory or an ancestor\n",
+            reinterpret_cast<unsigned long long>(dir.directory_handle.get()));
+        dir.directory_handle.close();
+        // @@@ we should reopen it or something.
+        break;
       }
-      break;
-    }
+        
+      case watched_directory::read_changes_overlapped_offset: {
+        BOOL ok = ::SetEvent(this->change_event_.get());
+        if (!ok) {
+          QLJS_UNIMPLEMENTED();
+        }
+        break;
+      }
+
+                                                            default:
+        QLJS_UNIMPLEMENTED();
+                                                              break;
+      }
+                                                            break;
+
     case completion_key::stop_io_thread:
       return;
     }
   }
+}
+
+configuration_filesystem_win32::watched_directory*
+configuration_filesystem_win32::watched_directory::from_oplock_overlapped(
+    OVERLAPPED* overlapped) noexcept {
+  return reinterpret_cast<watched_directory*>(
+      reinterpret_cast<std::uintptr_t>(overlapped) -
+      offsetof(watched_directory, oplock_overlapped));
 }
 #endif
 }
