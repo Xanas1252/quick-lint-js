@@ -406,9 +406,6 @@ configuration_filesystem_win32::~configuration_filesystem_win32() {
     std::unique_lock guard(this->watched_directories_mutex_);
 
     for (auto& [directory_path, dir]: this->watched_directories_) {
-      if (dir.directory_handle.get() == nullptr) {
-        continue;  // @@@ hack for now
-      }
       [[maybe_unused]] BOOL ok =
           ::CancelIoEx(dir.directory_handle.get(), nullptr);
       if (!ok) {
@@ -520,14 +517,16 @@ void configuration_filesystem_win32::watch_directory(
         directory_id.VolumeSerialNumber ==
             dir.directory_id.VolumeSerialNumber &&
         std::memcmp(&directory_id.FileId, &dir.directory_id.FileId,
-                    sizeof(directory_id.FileId));
-    if (!dir.directory_handle.valid()) already_watched = false; // @@@ remove when we fix io thread.
+                    sizeof(directory_id.FileId)) == 0;
 
     if (already_watched) {
-      return;
+      // @@@ deadlocks if we don't return here.
+        return;
     }
 
-    if (dir.directory_handle.valid()) {
+    QLJS_LOG("note: Directory handle %#llx: %s: Directory identity changed\n",
+             reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
+        directory.c_str());
       // @@@ put this sucker in a function.
       BOOL ok = ::CancelIoEx(dir.directory_handle.get(), nullptr);
       if (!ok) {
@@ -550,7 +549,7 @@ void configuration_filesystem_win32::watch_directory(
           QLJS_UNIMPLEMENTED();
         }
       }
-    }
+
     dir.directory_handle =
         windows_handle_file(directory_handle);
   }
@@ -615,8 +614,11 @@ void configuration_filesystem_win32::run_io_thread() {
             "note: Directory handle %#llx: %s: Oplock broke\n",
             reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
             dir.directory_path.c_str());
-        dir.directory_handle.close();
-        // @@@ remove the entry from this->watched_directories_
+        //dir.directory_handle.close();
+        auto directory_it = this->find_watched_directory(&dir);
+        QLJS_ASSERT(directory_it != this->watched_directories_.end());
+        // Erasing dir will close dir.directory_handle, releasing the oplock.
+        this->watched_directories_.erase(directory_it);
 
                 BOOL ok = ::SetEvent(this->change_event_.get());
         if (!ok) {
@@ -633,6 +635,14 @@ void configuration_filesystem_win32::run_io_thread() {
       QLJS_UNREACHABLE();
     }
   }
+}
+
+std::unordered_map<canonical_path,
+                   configuration_filesystem_win32::watched_directory>::iterator
+configuration_filesystem_win32::find_watched_directory(watched_directory*dir) {
+  return std::find_if(
+      this->watched_directories_.begin(), this->watched_directories_.end(),
+      [&](const auto& entry) { return &entry.second == dir; });
 }
 
 configuration_filesystem_win32::watched_directory*

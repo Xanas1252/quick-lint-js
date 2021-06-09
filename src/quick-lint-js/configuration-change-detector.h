@@ -191,6 +191,10 @@ class configuration_filesystem_win32 : public configuration_filesystem {
 
   void watch_directory(const canonical_path&);
 
+  // Assumption: watched_directories_mutex_ is held.
+  std::unordered_map<canonical_path, watched_directory>::iterator find_watched_directory(
+      watched_directory*);
+
   void run_io_thread();
 
   windows_handle_file change_event_;
