@@ -610,8 +610,6 @@ void configuration_filesystem_win32::run_io_thread() {
       watched_directory& dir =
             *watched_directory::from_oplock_overlapped(overlapped);
       // @@@ fires, but why?
-        //QLJS_ASSERT(dir.oplock_response.Flags &
-        //            REQUEST_OPLOCK_OUTPUT_FLAG_ACK_REQUIRED);
       if (error == 0) {
         QLJS_LOG("@@@ %s overlapped=%p number_of_bytes_transferred=%llx\n",
                  error ? "aborted" : "broke", overlapped,
@@ -623,6 +621,10 @@ void configuration_filesystem_win32::run_io_thread() {
             "note: Directory handle %#llx: %s: Oplock broke\n",
             reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
             dir.directory_path.c_str());
+        QLJS_ASSERT(number_of_bytes_transferred == sizeof(dir.oplock_response));
+        QLJS_ASSERT(dir.oplock_response.Flags &
+                   REQUEST_OPLOCK_OUTPUT_FLAG_ACK_REQUIRED);
+
       }
         auto directory_it = this->find_watched_directory(&dir);
         QLJS_ASSERT(directory_it != this->watched_directories_.end());
