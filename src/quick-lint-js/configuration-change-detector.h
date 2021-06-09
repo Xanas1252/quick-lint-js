@@ -154,13 +154,14 @@ class configuration_filesystem_win32 : public configuration_filesystem {
 
  private:
   struct watched_directory {
-    explicit watched_directory([[maybe_unused]] const canonical_path &directory_path, HANDLE
-                                   directory_handle)
+    explicit watched_directory([[maybe_unused]] const canonical_path &directory_path, HANDLE directory_handle, const ::FILE_ID_INFO &directory_id)
         : 
         #if !NDEBUG
         directory_path(directory_path),
         #endif
-         directory_handle(directory_handle) {
+         directory_handle(directory_handle),
+    directory_id(directory_id)
+    {
       this->oplock_overlapped.Offset = 0;
       this->oplock_overlapped.OffsetHigh = 0;
       this->oplock_overlapped.hEvent = nullptr;
@@ -171,6 +172,7 @@ class configuration_filesystem_win32 : public configuration_filesystem {
     watched_directory &operator=(const watched_directory&) = delete;
 
     windows_handle_file directory_handle;
+    ::FILE_ID_INFO directory_id;
 
     OVERLAPPED oplock_overlapped;
     REQUEST_OPLOCK_OUTPUT_BUFFER oplock_response;

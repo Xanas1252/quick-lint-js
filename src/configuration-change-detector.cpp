@@ -504,14 +504,31 @@ void configuration_filesystem_win32::watch_directory(
     QLJS_UNIMPLEMENTED();
   }
 
+  FILE_ID_INFO directory_id;
+  if (!::GetFileInformationByHandleEx(directory_handle, ::FileIdInfo,
+                                      &directory_id, sizeof(directory_id))) {
+    QLJS_UNIMPLEMENTED();
+  }
+
   auto [watched_directory_it, inserted] = this->watched_directories_.try_emplace(
-      directory,
-      directory, directory_handle);
+      directory, directory,
+                                             directory_handle, directory_id);
+  
   watched_directory& dir = watched_directory_it->second;
   if (!inserted) {
-    if (dir.directory_handle
-            .valid()) {  // @@@ remove check when we fix the io thread
-                         // @@@ put this sucker in a function.
+    bool already_watched =
+        directory_id.VolumeSerialNumber ==
+            dir.directory_id.VolumeSerialNumber &&
+        std::memcmp(&directory_id.FileId, &dir.directory_id.FileId,
+                    sizeof(directory_id.FileId));
+    if (!dir.directory_handle.valid()) already_watched = false; // @@@ remove when we fix io thread.
+
+    if (already_watched) {
+      return;
+    }
+
+    if (dir.directory_handle.valid()) {
+      // @@@ put this sucker in a function.
       BOOL ok = ::CancelIoEx(dir.directory_handle.get(), nullptr);
       if (!ok) {
         DWORD error = ::GetLastError();
@@ -534,7 +551,6 @@ void configuration_filesystem_win32::watch_directory(
         }
       }
     }
-
     dir.directory_handle =
         windows_handle_file(directory_handle);
   }
