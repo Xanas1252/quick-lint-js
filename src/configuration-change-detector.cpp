@@ -419,20 +419,20 @@ configuration_filesystem_win32::~configuration_filesystem_win32() {
         }
       }
     }
-    for (watched_directory& dir : this->watched_directories_) {
-      [[maybe_unused]] DWORD bytes_transferred;
-      BOOL ok = ::GetOverlappedResult(dir.directory_handle.get(),
-                                      &dir.read_changes_overlapped,
-                                      &bytes_transferred, /*bWait=*/true);
-      if (!ok) {
-        DWORD error = ::GetLastError();
-        if (error == ERROR_OPERATION_ABORTED) {
-          // Expected: CancelIoEx succeeded.
-        } else {
-          QLJS_UNIMPLEMENTED();
-        }
-      }
-    }
+    //for (watched_directory& dir : this->watched_directories_) {
+    //  [[maybe_unused]] DWORD bytes_transferred;
+    //  BOOL ok = ::GetOverlappedResult(dir.directory_handle.get(),
+    //                                  &dir.read_changes_overlapped,
+    //                                  &bytes_transferred, /*bWait=*/true);
+    //  if (!ok) {
+    //    DWORD error = ::GetLastError();
+    //    if (error == ERROR_OPERATION_ABORTED) {
+    //      // Expected: CancelIoEx succeeded.
+    //    } else {
+    //      QLJS_UNIMPLEMENTED();
+    //    }
+    //  }
+    //}
     for (watched_directory& dir : this->watched_directories_) {
       [[maybe_unused]] DWORD bytes_transferred;
       BOOL ok = ::GetOverlappedResult(dir.directory_handle.get(),
@@ -517,7 +517,7 @@ void configuration_filesystem_win32::watch_directory(
     QLJS_UNIMPLEMENTED();
   }
   watched_directory& dir =
-      this->watched_directories_.emplace_back(directory_handle, this);
+      this->watched_directories_.emplace_back(directory, directory_handle, this);
 
   // @@@ create/destroy the event cleanly
   dir.oplock_overlapped.hEvent = ::CreateEvent(/*lpEventAttributes=*/nullptr, /*bManualReset=*/false,
@@ -527,11 +527,12 @@ void configuration_filesystem_win32::watch_directory(
   }
 
   // https://github.com/pauldotknopf/WindowsSDK7-Samples/blob/3f2438b15c59fdc104c13e2cf6cf46c1b16cf281/winbase/io/Oplocks/Oplocks/Oplocks.cpp
+  // "An RH oplock on a directory breaks to R when the directory itself is renamed or deleted." https://docs.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_request_oplock
   REQUEST_OPLOCK_INPUT_BUFFER request;
     request.StructureVersion = REQUEST_OPLOCK_CURRENT_VERSION;
   request.StructureLength = sizeof(REQUEST_OPLOCK_INPUT_BUFFER);
-    request.RequestedOplockLevel =
-      OPLOCK_LEVEL_CACHE_READ | OPLOCK_LEVEL_CACHE_HANDLE;
+    request.RequestedOplockLevel = OPLOCK_LEVEL_CACHE_READ |
+                                 OPLOCK_LEVEL_CACHE_HANDLE;
   request.Flags = REQUEST_OPLOCK_INPUT_FLAG_REQUEST;
   BOOL okie =
       ::DeviceIoControl(/*hDevice=*/dir.directory_handle.get(),
@@ -552,24 +553,24 @@ void configuration_filesystem_win32::watch_directory(
     }
   }
 
-  BOOL ok = ::ReadDirectoryChangesW(
-      /*hDirectory=*/dir.directory_handle.get(),
-      /*lpBuffer=*/&dir.buffer,
-      /*nBufferLength=*/sizeof(dir.buffer),
-      /*bWatchSubtree=*/false,
-      /*dwNotifyFilter=*/FILE_NOTIFY_CHANGE_FILE_NAME |
-          FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_ATTRIBUTES |
-          FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE |
-          FILE_NOTIFY_CHANGE_SECURITY | FILE_NOTIFY_CHANGE_CREATION |
-          FILE_NOTIFY_CHANGE_LAST_ACCESS,
-      /*lpBytesReturned=*/nullptr,
-      /*lpOverlapped=*/&dir.read_changes_overlapped,
-      /*lpCompletionRoutine=*/nullptr);
-  if (!ok) {
-    std::fprintf(stderr, "fatal: ReadDirectoryChangesW failed: %d\n",
-                 ::GetLastError());
-    QLJS_UNIMPLEMENTED();  // @@@
-  }
+  //BOOL ok = ::ReadDirectoryChangesW(
+  //    /*hDirectory=*/dir.directory_handle.get(),
+  //    /*lpBuffer=*/&dir.buffer,
+  //    /*nBufferLength=*/sizeof(dir.buffer),
+  //    /*bWatchSubtree=*/false,
+  //    /*dwNotifyFilter=*/FILE_NOTIFY_CHANGE_FILE_NAME |
+  //        FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_ATTRIBUTES |
+  //        FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE |
+  //        FILE_NOTIFY_CHANGE_SECURITY | FILE_NOTIFY_CHANGE_CREATION |
+  //        FILE_NOTIFY_CHANGE_LAST_ACCESS,
+  //    /*lpBytesReturned=*/nullptr,
+  //    /*lpOverlapped=*/&dir.read_changes_overlapped,
+  //    /*lpCompletionRoutine=*/nullptr);
+  //if (!ok) {
+  //  std::fprintf(stderr, "fatal: ReadDirectoryChangesW failed: %d\n",
+  //               ::GetLastError());
+  //  QLJS_UNIMPLEMENTED();  // @@@
+  //}
 }
 
 void configuration_filesystem_win32::run_io_thread() {
@@ -599,20 +600,38 @@ void configuration_filesystem_win32::run_io_thread() {
         watched_directory& dir =
             *watched_directory::from_oplock_overlapped(overlapped);
         std::unique_lock guard(this->watched_directories_mutex_);
+        QLJS_ASSERT(dir.oplock_response.Flags &
+                    REQUEST_OPLOCK_OUTPUT_FLAG_ACK_REQUIRED);
         QLJS_LOG(
-            "note: Oplock broke for directory handle %#llx. Somebody probably "
-            "moved the directory or an ancestor\n",
-            reinterpret_cast<unsigned long long>(dir.directory_handle.get()));
+            "note: Directory handle %#llx: %s: Oplock broke. Somebody probably "
+            "moved the directory or an ancestor.\n",
+            reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
+            dir.directory_path.c_str());
         dir.directory_handle.close();
         // @@@ we should reopen it or something.
+
+                BOOL ok = ::SetEvent(this->change_event_.get());
+        if (!ok) {
+          QLJS_UNIMPLEMENTED();
+        }
+
         break;
       }
         
       case watched_directory::read_changes_overlapped_offset: {
-        BOOL ok = ::SetEvent(this->change_event_.get());
-        if (!ok) {
-          QLJS_UNIMPLEMENTED();
-        }
+        watched_directory& dir =
+            *watched_directory::from_read_changes_overlapped(overlapped);
+        std::unique_lock guard(this->watched_directories_mutex_);
+        QLJS_ASSERT(dir.oplock_response.Flags &
+                    REQUEST_OPLOCK_OUTPUT_FLAG_ACK_REQUIRED);
+        QLJS_LOG(
+            "note: Directory handle %#llx: %s: ReadDirectoryChangesW signalled.\n",
+            reinterpret_cast<unsigned long long>(dir.directory_handle.get()),
+            dir.directory_path.c_str());
+        //BOOL ok = ::SetEvent(this->change_event_.get());
+        //if (!ok) {
+        //  QLJS_UNIMPLEMENTED();
+        //}
         break;
       }
 
@@ -626,6 +645,14 @@ void configuration_filesystem_win32::run_io_thread() {
       return;
     }
   }
+}
+
+configuration_filesystem_win32::watched_directory*
+configuration_filesystem_win32::watched_directory::from_read_changes_overlapped(
+    OVERLAPPED* overlapped) noexcept {
+  return reinterpret_cast<watched_directory*>(
+      reinterpret_cast<std::uintptr_t>(overlapped) -
+      offsetof(watched_directory, read_changes_overlapped));
 }
 
 configuration_filesystem_win32::watched_directory*

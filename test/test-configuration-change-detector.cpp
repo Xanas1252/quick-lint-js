@@ -11,6 +11,7 @@
 #include <quick-lint-js/file-path.h>
 #include <quick-lint-js/file.h>
 #include <quick-lint-js/have.h>
+#include <quick-lint-js/utf-16.h>
 #include <quick-lint-js/temporary-directory.h>
 #include <quick-lint-js/warning.h>
 #include <string>
@@ -906,7 +907,7 @@ TEST_F(
 }
 
 TEST_F(test_configuration_change_detector,
-       rewriting_config_is_detected_as_change) {
+       rewriting_config_completely_is_detected_as_change) {
   std::string project_dir = this->make_temporary_directory();
   std::string js_file = project_dir + "/hello.js";
   write_file(js_file, u8"");
@@ -917,6 +918,46 @@ TEST_F(test_configuration_change_detector,
   detector.get_config_for_file(js_file);
 
   write_file(config_file, u8R"({"globals": {"after": true}})");
+
+  std::vector<configuration_change> changes =
+      poll_and_process_changes(detector);
+  ASSERT_THAT(changes, ElementsAre(::testing::_));
+  EXPECT_SAME_FILE(*changes[0].watched_path, js_file);
+  EXPECT_SAME_FILE(changes[0].config->config_file_path(), config_file);
+}
+
+TEST_F(test_configuration_change_detector,
+       rewriting_config_partially_is_detected_as_change) {
+  std::string project_dir = this->make_temporary_directory();
+  std::string js_file = project_dir + "/hello.js";
+  write_file(js_file, u8"");
+  std::string config_file = project_dir + "/quick-lint-js.config";
+  write_file(config_file, u8R"({"globals": {"before": true}})");
+
+  configuration_change_detector detector;
+  detector.get_config_for_file(js_file);
+
+  std::optional<std::wstring> wide_config_file =
+      mbstring_to_wstring(config_file.c_str());
+  ASSERT_TRUE(wide_config_file.has_value()) << windows_error_message(::GetLastError());
+  HANDLE handle = ::CreateFileW(
+      wide_config_file->c_str(), /*dwDesiredAccess=*/GENERIC_READ | GENERIC_WRITE,
+      /*dwShareMode=*/FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE,
+      /*lpSecurityAttributes=*/nullptr,
+      /*dwCreationDisposition=*/OPEN_EXISTING,
+      /*dwFlagsAndAttributes=*/FILE_ATTRIBUTE_NORMAL,
+      /*hTemplateFile=*/nullptr);
+  ASSERT_NE(handle, INVALID_HANDLE_VALUE)
+      << windows_error_message(::GetLastError());
+  ASSERT_NE(::SetFilePointer(handle, strlen(u8R"({"globals": {")"), nullptr, FILE_BEGIN),
+            INVALID_SET_FILE_POINTER)
+      << windows_error_message(::GetLastError());
+  ASSERT_TRUE(::WriteFile(handle, u8"after_", 6,
+                          /*lpNumberOfBytesWritten=*/nullptr,
+                          /*lpOverlapped=*/nullptr))
+      << windows_error_message(::GetLastError());
+  CloseHandle(handle);
+
 
   std::vector<configuration_change> changes =
       poll_and_process_changes(detector);

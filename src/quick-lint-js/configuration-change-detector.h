@@ -154,9 +154,14 @@ class configuration_filesystem_win32 : public configuration_filesystem {
 
  private:
   struct watched_directory {
-    explicit watched_directory(HANDLE directory_handle,
+    explicit watched_directory([[maybe_unused]] const canonical_path &directory_path, HANDLE
+                                   directory_handle,
                                configuration_filesystem_win32* self)
-        : directory_handle(directory_handle), self(self) {
+        : 
+        #if !NDEBUG
+        directory_path(directory_path),
+        #endif
+         directory_handle(directory_handle), self(self) {
       this->read_changes_overlapped.hEvent =
           ::CreateEventW(/*lpEventAttributes=*/nullptr, /*bManualReset=*/false,
                          /*bInitialState=*/false, /*lpName=*/nullptr); // @@@ check
@@ -177,6 +182,12 @@ class configuration_filesystem_win32 : public configuration_filesystem {
     OVERLAPPED oplock_overlapped;
     REQUEST_OPLOCK_OUTPUT_BUFFER oplock_response;
 
+    #if !NDEBUG
+    canonical_path directory_path;
+    #endif
+
+    static watched_directory* from_read_changes_overlapped(
+        OVERLAPPED*) noexcept;
     static watched_directory* from_oplock_overlapped(OVERLAPPED*) noexcept;
 
     enum overlapped_offset : DWORD {
