@@ -223,6 +223,10 @@ pre mark:empty::before {
     text-decoration: none;
   }
 
+  .side-bar-nav header nav li.current-page li {
+    font-weight: initial;
+  }
+
   .side-bar-nav header nav li.current-page {
     font-weight: bold;
   }
